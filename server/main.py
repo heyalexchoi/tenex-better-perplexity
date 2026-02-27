@@ -2,22 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from server.agent_runner import run_agent_task
 from server.auth import require_auth
-from server.database import get_session, init_db
-from server.models import AgentEventRecord, Message, MessageCreate, Session, SessionResponse
-from server.runtime import AgentEvent, SessionRuntime, active_sessions, event_to_dict
+from server.database import check_db_ready, get_session
+from server.models import Message, MessageCreate, Session, SessionResponse
+from server.runtime import MessageStreamState, SessionRuntime, active_sessions, event_to_dict
 
-app = FastAPI(title="Better Perplexity API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await check_db_ready()
+    yield
+
+
+app = FastAPI(title="Better Perplexity API", version="0.1.0", lifespan=lifespan)
 router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
+SCREENSHOT_ROOT = Path(os.getenv("SCREENSHOT_DIR", "/workspace/data/screenshots"))
+SCREENSHOT_ROOT.mkdir(parents=True, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,11 +37,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    await init_db()
+app.mount("/api/files/screenshots", StaticFiles(directory=str(SCREENSHOT_ROOT)), name="screenshots")
 
 
 @app.get("/api/health")
@@ -68,48 +75,22 @@ async def get_session_data(session_id: str, db: AsyncSession = Depends(get_sessi
         (await db.exec(select(Message).where(Message.session_id == session_id).order_by(Message.timestamp.asc())))
         .all()
     )
-    events = (
-        (
-            await db.exec(
-                select(AgentEventRecord)
-                .where(AgentEventRecord.session_id == session_id)
-                .order_by(AgentEventRecord.timestamp.asc())
-            )
-        )
-        .all()
-    )
-
     return SessionResponse(
         id=session.id,
         created_at=session.created_at,
         status=session.status,
         messages=messages,
-        events=events,
+        events=[],
     )
 
 
 @router.get("/sessions/{session_id}/events")
 async def get_session_events(session_id: str, db: AsyncSession = Depends(get_session)) -> list[dict]:
-    events = (
-        (
-            await db.exec(
-                select(AgentEventRecord)
-                .where(AgentEventRecord.session_id == session_id)
-                .order_by(AgentEventRecord.timestamp.asc())
-            )
-        )
-        .all()
-    )
-    return [
-        {
-            "id": event.id,
-            "session_id": event.session_id,
-            "type": event.type,
-            "data": json.loads(event.data),
-            "timestamp": event.timestamp.isoformat(),
-        }
-        for event in events
-    ]
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # Stream events are transient and only kept in-memory for the current response.
+    return []
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -135,6 +116,11 @@ async def create_message(
     if runtime.current_task and not runtime.current_task.done():
         raise HTTPException(status_code=409, detail="Agent is already running")
 
+    runtime.stream_state = MessageStreamState()
+    session.status = "running"
+    db.add(session)
+    await db.commit()
+
     runtime.current_task = asyncio.create_task(run_agent_task(runtime, payload.content))
     return message
 
@@ -142,12 +128,16 @@ async def create_message(
 @router.get("/sessions/{session_id}/stream")
 async def stream_session(session_id: str):
     runtime = active_sessions.get(session_id)
-    if runtime is None:
+    if runtime is None or runtime.stream_state is None:
         raise HTTPException(status_code=404, detail="No active agent run")
+    state = runtime.stream_state
 
     async def event_generator():
+        cursor = 0
         while True:
-            event = await runtime.events_queue.get()
+            event, cursor = await state.next_event(cursor)
+            if event is None:
+                break
             yield f"data: {json.dumps(event_to_dict(event))}\n\n"
             if event.type in ("done", "error"):
                 break

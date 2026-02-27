@@ -9,40 +9,104 @@ const LOCAL_AUTH_KEY = "bp_auth_token"
 const LOCAL_SESSION_KEY = "bp_session_id"
 
 function buildFeed(messages: Message[], events: AgentEvent[]): FeedItem[] {
-  const messageItems: FeedItem[] = messages.map((message) => ({
-    kind: message.role === "assistant" ? "assistant" : "user",
-    id: message.id,
-    content: message.content,
-    timestamp: message.timestamp,
-  }))
-
-  const eventItems: FeedItem[] = events.map((event) => {
-    if (event.type === "step") {
+  const messageItems: FeedItem[] = messages.map((message) => {
+    if (message.role === "tool") {
+      let meta: Record<string, unknown> = {}
+      try {
+        meta = message.meta_json ? (JSON.parse(message.meta_json) as Record<string, unknown>) : {}
+      } catch {
+        meta = {}
+      }
       return {
         kind: "step",
-        id: `event-${event.id ?? crypto.randomUUID()}`,
-        step: Number(event.data.step ?? 0),
-        action: String(event.data.action ?? "thinking"),
-        url: event.data.url ? String(event.data.url) : undefined,
-        screenshot: event.data.screenshot ? String(event.data.screenshot) : null,
-        timestamp: event.timestamp,
-      }
-    }
-    if (event.type === "done") {
-      return {
-        kind: "assistant",
-        id: `event-${event.id ?? crypto.randomUUID()}`,
-        content: String(event.data.result ?? "Done"),
-        timestamp: event.timestamp,
+        id: message.id,
+        step: 0,
+        action: `Tool: ${String(meta.tool_name ?? "tool")}`,
+        url: meta.url ? String(meta.url) : undefined,
+        screenshot: meta.screenshot ? String(meta.screenshot) : null,
+        timestamp: message.timestamp,
       }
     }
     return {
-      kind: "error",
-      id: `event-${event.id ?? crypto.randomUUID()}`,
-      error: String(event.data.error ?? "Unexpected error"),
-      timestamp: event.timestamp,
+      kind: message.role === "assistant" ? "assistant" : "user",
+      id: message.id,
+      content: message.content,
+      timestamp: message.timestamp,
     }
   })
+
+  const eventItems: FeedItem[] = []
+  let stepCounter = 0
+  let liveAssistantText = ""
+  let liveTimestamp = ""
+
+  for (const event of events) {
+    if (event.type === "token") {
+      liveAssistantText += String(event.data.text ?? "")
+      liveTimestamp = event.timestamp
+      continue
+    }
+    if (event.type === "done") {
+      const result = String(event.data.result ?? "").trim()
+      if (result) {
+        liveAssistantText = result
+      }
+      liveTimestamp = event.timestamp
+      continue
+    }
+    if (event.type === "thinking") {
+      stepCounter += 1
+      eventItems.push({
+        kind: "step",
+        id: `event-${event.id ?? crypto.randomUUID()}`,
+        step: stepCounter,
+        action: `Thinking: ${String(event.data.text ?? "").trim()}`,
+        timestamp: event.timestamp,
+      })
+      continue
+    }
+    if (event.type === "tool_start") {
+      stepCounter += 1
+      eventItems.push({
+        kind: "step",
+        id: `event-${event.id ?? crypto.randomUUID()}`,
+        step: stepCounter,
+        action: `Tool start: ${String(event.data.name ?? "tool")}`,
+        timestamp: event.timestamp,
+      })
+      continue
+    }
+    if (event.type === "tool_end") {
+      stepCounter += 1
+      eventItems.push({
+        kind: "step",
+        id: `event-${event.id ?? crypto.randomUUID()}`,
+        step: stepCounter,
+        action: `Tool done: ${String(event.data.name ?? "tool")}`,
+        url: event.data.url ? String(event.data.url) : undefined,
+        screenshot: event.data.screenshot ? String(event.data.screenshot) : null,
+        timestamp: event.timestamp,
+      })
+      continue
+    }
+    if (event.type === "error") {
+      eventItems.push({
+        kind: "error",
+        id: `event-${event.id ?? crypto.randomUUID()}`,
+        error: String(event.data.error ?? "Unexpected error"),
+        timestamp: event.timestamp,
+      })
+    }
+  }
+
+  if (liveAssistantText.trim()) {
+    eventItems.push({
+      kind: "assistant",
+      id: "live-assistant",
+      content: liveAssistantText,
+      timestamp: liveTimestamp || new Date().toISOString(),
+    })
+  }
 
   return [...messageItems, ...eventItems].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
@@ -79,7 +143,7 @@ export default function App() {
     return fetch(path, { ...options, headers })
   }
 
-  const checkAuth = async (token: string) => {
+  const checkAuth = async (token: string, showErrors = true) => {
     setAuthError(null)
     const res = await fetch("/api/auth/check", {
       method: "POST",
@@ -95,7 +159,9 @@ export default function App() {
       setAuthChecked(true)
       return true
     }
-    setAuthError("Password incorrect. Try again.")
+    if (showErrors) {
+      setAuthError("Password incorrect. Try again.")
+    }
     setAuthChecked(false)
     return false
   }
@@ -110,10 +176,7 @@ export default function App() {
         setSessionId(data.id)
         setStatus(data.status)
         setMessages(data.messages ?? [])
-        const eventsRes = await apiFetch(`/api/sessions/${existing}/events`)
-        if (eventsRes.ok) {
-          setEvents(await eventsRes.json())
-        }
+        setEvents([])
         setLoading(false)
         return existing
       }
@@ -144,18 +207,35 @@ export default function App() {
 
     source.onmessage = (event) => {
       const parsed = JSON.parse(event.data) as AgentEvent
-      setEvents((prev) => [...prev, parsed])
       if (parsed.type === "done") {
+        const result = String(parsed.data?.result ?? "").trim()
+        if (result) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `local-${crypto.randomUUID()}`,
+              session_id: id,
+              role: "assistant",
+              content: result,
+              timestamp: parsed.timestamp,
+            },
+          ])
+        }
+        setEvents([])
         setStatus("idle")
         setStreaming(false)
         source.close()
+        return
       }
       if (parsed.type === "error") {
+        setEvents((prev) => [...prev, parsed])
         setStatus("error")
         setBanner(String(parsed.data?.error ?? "Agent error"))
         setStreaming(false)
         source.close()
+        return
       }
+      setEvents((prev) => [...prev, parsed])
     }
     source.onerror = () => {
       setBanner("Stream disconnected.")
@@ -167,6 +247,7 @@ export default function App() {
   const handleSend = async (text: string) => {
     setBanner(null)
     const id = sessionId ?? (await ensureSession())
+    setEvents([])
     setStatus("running")
 
     const res = await apiFetch(`/api/sessions/${id}/messages`, {
@@ -200,7 +281,12 @@ export default function App() {
 
   useEffect(() => {
     const saved = localStorage.getItem(LOCAL_AUTH_KEY) ?? ""
-    checkAuth(saved)
+    if (!saved) {
+      setAuthChecked(false)
+      setAuthError(null)
+      return
+    }
+    checkAuth(saved, false)
   }, [])
 
   useEffect(() => {
@@ -259,7 +345,7 @@ export default function App() {
                 const form = event.currentTarget
                 const data = new FormData(form)
                 const token = String(data.get("password") || "")
-                checkAuth(token)
+                checkAuth(token, true)
               }}
             >
               <input

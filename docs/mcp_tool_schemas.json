@@ -1,0 +1,284 @@
+[
+  {
+    "name": "browser_navigate",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to navigate to"
+        },
+        "new_tab": {
+          "type": "boolean",
+          "description": "Whether to open in a new tab",
+          "default": false
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "browser_click",
+    "top_level_union": [
+      "oneOf"
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "description": "The index of the element to click (from browser_get_state). Use this OR coordinates."
+        },
+        "coordinate_x": {
+          "type": "integer",
+          "description": "X coordinate (pixels from left edge of viewport). Use with coordinate_y."
+        },
+        "coordinate_y": {
+          "type": "integer",
+          "description": "Y coordinate (pixels from top edge of viewport). Use with coordinate_x."
+        },
+        "new_tab": {
+          "type": "boolean",
+          "description": "Whether to open any resulting navigation in a new tab",
+          "default": false
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "index"
+          ]
+        },
+        {
+          "required": [
+            "coordinate_x",
+            "coordinate_y"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "browser_type",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "description": "The index of the input element (from browser_get_state)"
+        },
+        "text": {
+          "type": "string",
+          "description": "The text to type"
+        }
+      },
+      "required": [
+        "index",
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "browser_get_state",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "include_screenshot": {
+          "type": "boolean",
+          "description": "Whether to include a screenshot of the current page",
+          "default": false
+        }
+      }
+    }
+  },
+  {
+    "name": "browser_extract_content",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "What information to extract from the page"
+        },
+        "extract_links": {
+          "type": "boolean",
+          "description": "Whether to include links in the extraction",
+          "default": false
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  {
+    "name": "browser_get_html",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "Optional CSS selector to get HTML of a specific element. If omitted, returns full page HTML."
+        }
+      }
+    }
+  },
+  {
+    "name": "browser_screenshot",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "full_page": {
+          "type": "boolean",
+          "description": "Whether to capture the full scrollable page or just the visible viewport",
+          "default": false
+        }
+      }
+    }
+  },
+  {
+    "name": "browser_scroll",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down"
+          ],
+          "description": "Direction to scroll",
+          "default": "down"
+        }
+      }
+    }
+  },
+  {
+    "name": "browser_go_back",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "browser_list_tabs",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "browser_switch_tab",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "tab_id": {
+          "type": "string",
+          "description": "4 Character Tab ID of the tab to switch to"
+        }
+      },
+      "required": [
+        "tab_id"
+      ]
+    }
+  },
+  {
+    "name": "browser_close_tab",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "tab_id": {
+          "type": "string",
+          "description": "4 Character Tab ID of the tab to close"
+        }
+      },
+      "required": [
+        "tab_id"
+      ]
+    }
+  },
+  {
+    "name": "retry_with_browser_use_agent",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "description": "The high-level goal and detailed step-by-step description of the task the AI browser agent needs to attempt, along with any relevant data needed to complete the task and info about previous attempts."
+        },
+        "max_steps": {
+          "type": "integer",
+          "description": "Maximum number of steps an agent can take.",
+          "default": 100
+        },
+        "model": {
+          "type": "string",
+          "description": "LLM model to use (e.g., gpt-4o, claude-3-opus-20240229)",
+          "default": "gpt-4o"
+        },
+        "allowed_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of domains the agent is allowed to visit (security feature)",
+          "default": []
+        },
+        "use_vision": {
+          "type": "boolean",
+          "description": "Whether to use vision capabilities (screenshots) for the agent",
+          "default": true
+        }
+      },
+      "required": [
+        "task"
+      ]
+    }
+  },
+  {
+    "name": "browser_list_sessions",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "browser_close_session",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "The browser session ID to close (get from browser_list_sessions)"
+        }
+      },
+      "required": [
+        "session_id"
+      ]
+    }
+  },
+  {
+    "name": "browser_close_all",
+    "top_level_union": [],
+    "schema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]

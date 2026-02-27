@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Column
+from sqlalchemy import DateTime, Column, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -27,6 +27,7 @@ class Message(SQLModel, table=True):
     session_id: str = Field(foreign_key="session.id", index=True)
     role: str
     content: str
+    meta_json: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
     timestamp: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

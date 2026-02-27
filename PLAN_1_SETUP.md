@@ -1,15 +1,20 @@
 # PLAN
 
 ## Issues
-- Password screen shows 'password incorrect' message as initial state. should not show this unless incorrect password attempted.
-- Chat screen - after sending initial message, response immediately comes back showing 'None'. This is wrong.
+- [fixed 2026-02-27] Password screen showed `'Password incorrect'` on initial load.
+  - Fix: initial auth bootstrap is now silent when no saved token; error only appears after failed manual submit.
+  - File: `web/src/App.tsx`
+- [fixed 2026-02-27] Chat screen could return `"None"` immediately after sending first message.
+  - Root cause: `history.final_result()` may be `None`.
+  - Fix: robust final-result extraction with fallback text when model returns no final summary.
+  - File: `server/agent_runner.py`
 
 ## Status Update (2026-02-26)
 - Milestone 0: Completed.
 - Milestone 1: Completed.
 - Milestone 2: Completed.
 - Milestone 3: Completed.
-- Milestone 4: In progress.
+- Milestone 4: Completed.
 
 Milestone 0 execution evidence:
 - Script added: `server/scripts/m0_browser_use_smoke.py`
@@ -63,7 +68,20 @@ Milestone 4 status:
 - `AUTH_TOKEN=... BASE_URL=http://127.0.0.1:8000/api ./scripts/curl_e2e.sh` now authenticates and streams events.
 - Real-agent smoke produced a `step` event; run was manually cancelled and emitted terminal `error` with `"Task cancelled"`.
 - Frontend blank page root cause fixed: TypeScript `verbatimModuleSyntax` import errors in `web/src/App.tsx` and component type imports.
-- Remaining: full real-agent done-path smoke (without manual cancellation) and final runbook confirmation.
+- Full real-agent done-path smoke completed:
+  - `AUTH_TOKEN=... BASE_URL=http://127.0.0.1:8000/api ./scripts/curl_e2e.sh`
+  - Result: SSE emitted terminal `done` event and persisted `done` record in Postgres (no `"None"` payload).
+  - Note: prompt `quick smoke task` is intentionally vague; current model returns a clarifying response, which is acceptable for smoke.
+
+Major issues/decisions to keep in plan:
+- Migration driver decision: app runtime remains async (`asyncpg`), Alembic uses sync `psycopg` URL mapping in `server/migrations/env.py`.
+- Existing DBs created pre-Alembic may require `alembic stamp head`; fresh DBs should use `alembic upgrade head`.
+- Auth gate is demo-grade only (`APP_PASSWORD` shared secret via header/query). Do not treat as production auth.
+- Canonical schema ownership: Alembic is source of truth. Runtime startup now performs DB readiness check only (`SELECT 1`) and does not run `create_all`.
+- FastAPI startup lifecycle updated from deprecated `@app.on_event("startup")` to lifespan.
+- Smoke prompt updated for Anthropic ping path verification:
+  - Prompt: `this is a ping test: do not think, respond as quickly as possible with any noun`
+  - Latest run result: terminal `done` with `"Cat"` (real agent mode).
 
 ## Goal
 Build a production-demo-ready "Better Perplexity" app: a chat interface that runs a browser-use agent via Claude, streams step-by-step browser actions/screenshots in real time over SSE, persists sessions/messages/events in Postgres, and runs end-to-end in Docker Compose.

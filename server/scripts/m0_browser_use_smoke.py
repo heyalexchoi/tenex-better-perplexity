@@ -41,7 +41,8 @@ async def main() -> int:
         print("ANTHROPIC_API_KEY is missing; cannot run Milestone 0 smoke test.", file=sys.stderr)
         return 2
 
-    model = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+    raw_model = os.getenv("AGENT_MODEL", "anthropic:claude-haiku-4-5-20251001")
+    model = raw_model.split(":", 1)[1] if ":" in raw_model else raw_model
     headless = os.getenv("HEADLESS", "true").lower() == "true"
 
     llm = ChatAnthropic(model=model, api_key=api_key)

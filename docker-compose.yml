@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       - .:/workspace:cached
+      - screenshots_data:/workspace/data/screenshots
     working_dir: /workspace
     ports:
       - "8000:8000"
@@ -52,3 +53,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  screenshots_data:

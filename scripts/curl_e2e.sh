@@ -15,7 +15,7 @@ echo "session_id=$session_id"
 curl -sS -X POST "$BASE_URL/sessions/$session_id/messages" \
   "${AUTH_HEADER[@]}" \
   -H 'content-type: application/json' \
-  -d '{"content":"quick smoke task"}' >/dev/null
+  -d '{"content":"this is a ping test: do not think, respond as quickly as possible with any noun"}' >/dev/null
 
 # stream stops on done/error
 if [[ -n "${AUTH_TOKEN:-}" ]]; then
@@ -25,4 +25,4 @@ else
 fi
 
 echo
-curl -sS "${AUTH_HEADER[@]}" "$BASE_URL/sessions/$session_id/events"
+curl -sS "${AUTH_HEADER[@]}" "$BASE_URL/sessions/$session_id"

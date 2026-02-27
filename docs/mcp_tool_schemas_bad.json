@@ -1,0 +1,43 @@
+[
+  {
+    "name": "browser_click",
+    "top_level_union": [
+      "oneOf"
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "description": "The index of the element to click (from browser_get_state). Use this OR coordinates."
+        },
+        "coordinate_x": {
+          "type": "integer",
+          "description": "X coordinate (pixels from left edge of viewport). Use with coordinate_y."
+        },
+        "coordinate_y": {
+          "type": "integer",
+          "description": "Y coordinate (pixels from top edge of viewport). Use with coordinate_x."
+        },
+        "new_tab": {
+          "type": "boolean",
+          "description": "Whether to open any resulting navigation in a new tab",
+          "default": false
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "index"
+          ]
+        },
+        {
+          "required": [
+            "coordinate_x",
+            "coordinate_y"
+          ]
+        }
+      ]
+    }
+  }
+]

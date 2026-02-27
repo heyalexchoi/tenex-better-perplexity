@@ -4,7 +4,8 @@
   "service": "app",
   "workspaceFolder": "/workspace",
   "mounts": [
-    "source=codex-data,target=/root/.codex,type=volume"
+    "source=codex-data,target=/root/.codex,type=volume",
+    "source=claude-code-state,target=/root/.claude,type=volume"
   ],
   "customizations": {
     "vscode": {

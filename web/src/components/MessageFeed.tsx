@@ -1,6 +1,5 @@
 import type { FeedItem } from "../types"
 import { AgentMessage } from "./AgentMessage"
-import { AgentStep } from "./AgentStep"
 import { UserMessage } from "./UserMessage"
 
 type MessageFeedProps = {
@@ -16,16 +15,11 @@ export function MessageFeed({ items, onOpenScreenshot }: MessageFeedProps) {
           return <UserMessage key={item.id} content={item.content} timestamp={item.timestamp} />
         }
         if (item.kind === "assistant") {
-          return <AgentMessage key={item.id} content={item.content} timestamp={item.timestamp} />
-        }
-        if (item.kind === "step") {
           return (
-            <AgentStep
+            <AgentMessage
               key={item.id}
-              step={item.step}
-              action={item.action}
-              url={item.url}
-              screenshot={item.screenshot}
+              content={item.content}
+              toolLines={item.toolLines}
               timestamp={item.timestamp}
               onOpenScreenshot={onOpenScreenshot}
             />

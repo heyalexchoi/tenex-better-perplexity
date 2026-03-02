@@ -3,13 +3,20 @@ import { ChatInput } from "./components/ChatInput"
 import { MessageFeed } from "./components/MessageFeed"
 import { ScreenshotModal } from "./components/ScreenshotModal"
 import { StatusIndicator } from "./components/StatusIndicator"
-import type { AgentEvent, FeedItem, Message, SessionStatus } from "./types"
+import type { AgentEvent, FeedItem, Message, SessionStatus, ToolLine } from "./types"
 
 const LOCAL_AUTH_KEY = "bp_auth_token"
 const LOCAL_SESSION_KEY = "bp_session_id"
 
 function buildFeed(messages: Message[], events: AgentEvent[]): FeedItem[] {
-  const messageItems: FeedItem[] = messages.map((message) => {
+  const timeline: Array<
+    | { type: "user"; id: string; timestamp: string; content: string }
+    | { type: "assistant"; id: string; timestamp: string; content: string }
+    | { type: "tool"; id: string; timestamp: string; line: ToolLine }
+    | { type: "error"; id: string; timestamp: string; error: string }
+  > = []
+
+  for (const message of messages) {
     if (message.role === "tool") {
       let meta: Record<string, unknown> = {}
       try {
@@ -17,28 +24,35 @@ function buildFeed(messages: Message[], events: AgentEvent[]): FeedItem[] {
       } catch {
         meta = {}
       }
-      return {
-        kind: "step",
+      const toolName = String(meta.tool_name ?? "tool")
+      const outputPreview = message.content.trim()
+      const label = outputPreview ? `${toolName}: ${outputPreview}` : `${toolName}: completed`
+      timeline.push({
+        type: "tool",
         id: message.id,
-        step: 0,
-        action: `Tool: ${String(meta.tool_name ?? "tool")}`,
-        url: meta.url ? String(meta.url) : undefined,
-        screenshot: meta.screenshot ? String(meta.screenshot) : null,
         timestamp: message.timestamp,
-      }
+        line: {
+          id: message.id,
+          label,
+          url: meta.url ? String(meta.url) : undefined,
+          screenshot: meta.screenshot ? String(meta.screenshot) : null,
+          timestamp: message.timestamp,
+        },
+      })
+      continue
     }
-    return {
-      kind: message.role === "assistant" ? "assistant" : "user",
+    timeline.push({
+      type: message.role === "assistant" ? "assistant" : "user",
       id: message.id,
-      content: message.content,
       timestamp: message.timestamp,
-    }
-  })
+      content: message.content,
+    })
+  }
 
-  const eventItems: FeedItem[] = []
   let stepCounter = 0
   let liveAssistantText = ""
   let liveTimestamp = ""
+  const pendingToolStarts: Record<string, { id: string; timestamp: string }> = {}
 
   for (const event of events) {
     if (event.type === "token") {
@@ -56,42 +70,48 @@ function buildFeed(messages: Message[], events: AgentEvent[]): FeedItem[] {
     }
     if (event.type === "thinking") {
       stepCounter += 1
-      eventItems.push({
-        kind: "step",
-        id: `event-${event.id ?? crypto.randomUUID()}`,
-        step: stepCounter,
-        action: `Thinking: ${String(event.data.text ?? "").trim()}`,
+      timeline.push({
+        type: "tool",
+        id: `event-${event.id ?? crypto.randomUUID()}-${stepCounter}`,
         timestamp: event.timestamp,
+        line: {
+          id: `event-${event.id ?? crypto.randomUUID()}-thinking-${stepCounter}`,
+          label: `thinking: ${String(event.data.text ?? "").trim()}`,
+          timestamp: event.timestamp,
+        },
       })
       continue
     }
     if (event.type === "tool_start") {
-      stepCounter += 1
-      eventItems.push({
-        kind: "step",
-        id: `event-${event.id ?? crypto.randomUUID()}`,
-        step: stepCounter,
-        action: `Tool start: ${String(event.data.name ?? "tool")}`,
+      const name = String(event.data.name ?? "tool")
+      pendingToolStarts[name] = {
+        id: `event-${event.id ?? crypto.randomUUID()}-start`,
         timestamp: event.timestamp,
-      })
+      }
       continue
     }
     if (event.type === "tool_end") {
       stepCounter += 1
-      eventItems.push({
-        kind: "step",
-        id: `event-${event.id ?? crypto.randomUUID()}`,
-        step: stepCounter,
-        action: `Tool done: ${String(event.data.name ?? "tool")}`,
-        url: event.data.url ? String(event.data.url) : undefined,
-        screenshot: event.data.screenshot ? String(event.data.screenshot) : null,
+      const outputPreview = String(event.data.output_preview ?? "").trim()
+      const name = String(event.data.name ?? "tool")
+      delete pendingToolStarts[name]
+      timeline.push({
+        type: "tool",
+        id: `event-${event.id ?? crypto.randomUUID()}-${stepCounter}`,
         timestamp: event.timestamp,
+        line: {
+          id: `event-${event.id ?? crypto.randomUUID()}-tool-${stepCounter}`,
+          label: outputPreview ? `${name}: ${outputPreview}` : `${name}: completed`,
+          url: event.data.url ? String(event.data.url) : undefined,
+          screenshot: event.data.screenshot ? String(event.data.screenshot) : null,
+          timestamp: event.timestamp,
+        },
       })
       continue
     }
     if (event.type === "error") {
-      eventItems.push({
-        kind: "error",
+      timeline.push({
+        type: "error",
         id: `event-${event.id ?? crypto.randomUUID()}`,
         error: String(event.data.error ?? "Unexpected error"),
         timestamp: event.timestamp,
@@ -99,18 +119,94 @@ function buildFeed(messages: Message[], events: AgentEvent[]): FeedItem[] {
     }
   }
 
+  for (const [name, pending] of Object.entries(pendingToolStarts)) {
+    timeline.push({
+      type: "tool",
+      id: pending.id,
+      timestamp: pending.timestamp,
+      line: {
+        id: `${pending.id}-line`,
+        label: `${name}: started...`,
+        timestamp: pending.timestamp,
+      },
+    })
+  }
+
   if (liveAssistantText.trim()) {
-    eventItems.push({
-      kind: "assistant",
+    timeline.push({
+      type: "assistant",
       id: "live-assistant",
       content: liveAssistantText,
       timestamp: liveTimestamp || new Date().toISOString(),
     })
   }
 
-  return [...messageItems, ...eventItems].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  )
+  timeline.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+
+  const feed: FeedItem[] = []
+  let assistantGroup:
+    | {
+        id: string
+        timestamp: string
+        content: string
+        toolLines: ToolLine[]
+      }
+    | null = null
+
+  const flushAssistantGroup = () => {
+    if (!assistantGroup) {
+      return
+    }
+    feed.push({
+      kind: "assistant",
+      id: assistantGroup.id,
+      content: assistantGroup.content,
+      toolLines: assistantGroup.toolLines.length ? assistantGroup.toolLines : undefined,
+      timestamp: assistantGroup.timestamp,
+    })
+    assistantGroup = null
+  }
+
+  for (const item of timeline) {
+    if (item.type === "user") {
+      flushAssistantGroup()
+      feed.push({
+        kind: "user",
+        id: item.id,
+        content: item.content,
+        timestamp: item.timestamp,
+      })
+      continue
+    }
+    if (item.type === "error") {
+      flushAssistantGroup()
+      feed.push({
+        kind: "error",
+        id: item.id,
+        error: item.error,
+        timestamp: item.timestamp,
+      })
+      continue
+    }
+    if (!assistantGroup) {
+      assistantGroup = {
+        id: `assistant-group-${item.id}`,
+        timestamp: item.timestamp,
+        content: "",
+        toolLines: [],
+      }
+    }
+    if (item.type === "tool") {
+      assistantGroup.toolLines.push(item.line)
+    } else if (item.type === "assistant") {
+      assistantGroup.content = assistantGroup.content
+        ? `${assistantGroup.content}\n${item.content}`
+        : item.content
+      assistantGroup.timestamp = item.timestamp
+    }
+  }
+  flushAssistantGroup()
+  return feed
 }
 
 export default function App() {
@@ -315,20 +411,17 @@ export default function App() {
   }, [feed.length])
 
   return (
-    <div className="min-h-screen px-6 py-10 text-ink-900">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
-        <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <div className="h-screen px-4 py-4 text-ink-900 md:px-6 md:py-6">
+      <div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-4">
+        <header className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.4em] text-fog-400">
               Better Perplexity
             </p>
-            <h1 className="font-display text-3xl text-ink-900 md:text-4xl">Browser Agent</h1>
+            <h1 className="font-display text-2xl text-ink-900 md:text-3xl">Browser Agent</h1>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <StatusIndicator status={status} />
-            {sessionId ? (
-              <span className="text-xs uppercase tracking-[0.2em] text-fog-400">Session {sessionId.slice(0, 6)}</span>
-            ) : null}
           </div>
         </header>
 
@@ -364,8 +457,8 @@ export default function App() {
             </form>
           </div>
         ) : (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <section className="glass flex min-h-[60vh] flex-col gap-6 rounded-3xl p-6 shadow-glow">
+          <section className="glass flex min-h-0 flex-1 flex-col rounded-3xl shadow-glow">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-5 md:px-6">
               {banner ? (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                   {banner}
@@ -379,20 +472,16 @@ export default function App() {
                 </div>
               )}
               <div ref={feedEndRef} />
-            </section>
-            <aside className="flex flex-col gap-4">
-              <div className="glass rounded-3xl p-6 shadow-glow">
-                <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-fog-400">Session</h3>
-                <div className="mt-4 space-y-2 text-sm text-ink-800">
-                  <div>Status: {status}</div>
-                  <div>Messages: {messages.length}</div>
-                  <div>Events: {events.length}</div>
-                  <div>Streaming: {streaming ? "Yes" : "No"}</div>
-                </div>
-              </div>
-              <ChatInput onSend={handleSend} onCancel={handleCancel} disabled={!sessionId || status === "running"} running={status === "running"} />
-            </aside>
-          </div>
+            </div>
+            <div className="sticky bottom-0 border-t border-fog-100 bg-white/75 p-3 backdrop-blur md:p-4">
+              <ChatInput
+                onSend={handleSend}
+                onCancel={handleCancel}
+                disabled={!sessionId || status === "running"}
+                running={status === "running"}
+              />
+            </div>
+          </section>
         )}
       </div>
       <ScreenshotModal src={activeScreenshot} onClose={() => setActiveScreenshot(null)} />

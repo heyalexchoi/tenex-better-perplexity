@@ -30,6 +30,17 @@ export function ChatInput({ onSend, onCancel, disabled, running }: ChatInputProp
         <textarea
           value={value}
           onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault()
+              const trimmed = value.trim()
+              if (!trimmed) {
+                return
+              }
+              onSend(trimmed)
+              setValue("")
+            }
+          }}
           rows={2}
           placeholder="Ask me to browse, compare, or summarize..."
           className="mt-2 w-full resize-none rounded-xl border border-fog-200 bg-white/70 px-4 py-3 text-sm text-ink-900 outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"

@@ -17,6 +17,14 @@ export type AgentEvent = {
   timestamp: string
 }
 
+export type ToolLine = {
+  id: string
+  label: string
+  url?: string
+  screenshot?: string | null
+  timestamp: string
+}
+
 export type FeedItem =
   | {
       kind: "user"
@@ -28,15 +36,7 @@ export type FeedItem =
       kind: "assistant"
       id: string
       content: string
-      timestamp: string
-    }
-  | {
-      kind: "step"
-      id: string
-      step: number
-      action: string
-      url?: string
-      screenshot?: string | null
+      toolLines?: ToolLine[]
       timestamp: string
     }
   | {

@@ -71,13 +71,18 @@ Set `APP_PASSWORD` in `.env`. The UI will prompt for a single password and sends
 ## Agent Config
 
 - `AGENT_MODEL`: default `anthropic:claude-haiku-4-5-20251001`
+- `BROWSER_AGENT_MODEL`: default `claude-haiku-4-5-20251001` (direct `browser_use.Agent` model)
 - `SUMMARY_MODEL`: default `anthropic:claude-haiku-4-5-20251001` (reserved for summarization middleware wiring)
 - `AGENT_MODE`: `real` or `mock`
 - `HEADLESS`: `true`/`false`
-- `BROWSER_MCP_COMMAND`: default `browser-use`
-- `BROWSER_MCP_ARGS`: default `--mcp`
+- `BROWSER_MAX_STEPS`: default `18`
 - `SCREENSHOT_DIR`: default `/workspace/data/screenshots`
 - `SCREENSHOT_URL_PREFIX`: default `/api/files/screenshots`
+
+Runtime architecture:
+- The backend delegates browsing tasks to direct `browser_use.Agent` execution.
+- Step progress streams to the UI as transient events.
+- The final user-facing assistant message is generated separately from a compact browser summary to keep model context bounded.
 
 Tool outputs are persisted as `tool` messages. Screenshot blobs are written to disk and tool messages store screenshot URL references.
 Tool metadata (including `tool_name` and `tool_call_id`) is stored in `message.meta_json`.

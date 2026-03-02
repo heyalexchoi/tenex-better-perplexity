@@ -3,22 +3,24 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
-from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from browser_use import Agent as BrowserUseAgent
+from browser_use import BrowserSession, ChatAnthropic
 from langchain.chat_models import init_chat_model
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.interceptors import MCPToolCallRequest, MCPToolCallResult
-from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_core.tools import tool
 
 try:
     from langchain.agents import create_agent
 except ImportError:  # pragma: no cover
     from langchain.agents import create_react_agent as create_agent
+
+from sqlmodel import select
 
 from server.database import async_session
 from server.models import Message, Session
@@ -26,14 +28,15 @@ from server.runtime import AgentEvent, MessageStreamState, SessionRuntime, now_i
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 AGENT_MODEL = os.getenv("AGENT_MODEL", "anthropic:claude-haiku-4-5-20251001")
+BROWSER_AGENT_MODEL = os.getenv("BROWSER_AGENT_MODEL", "claude-haiku-4-5-20251001")
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "anthropic:claude-haiku-4-5-20251001")
 AGENT_MODE = os.getenv("AGENT_MODE", "real").lower()
-BROWSER_MCP_COMMAND = os.getenv("BROWSER_MCP_COMMAND", "browser-use")
-BROWSER_MCP_ARGS = os.getenv("BROWSER_MCP_ARGS", "--mcp").split()
+BROWSER_MAX_STEPS = int(os.getenv("BROWSER_MAX_STEPS", "18"))
+MAX_CHAT_HISTORY = int(os.getenv("MAX_CHAT_HISTORY", "16"))
 SCREENSHOT_DIR = Path(os.getenv("SCREENSHOT_DIR", "/workspace/data/screenshots"))
 SCREENSHOT_URL_PREFIX = os.getenv("SCREENSHOT_URL_PREFIX", "/api/files/screenshots")
 
-_TOOLS_LOGGED = False
+logger = logging.getLogger(__name__)
 
 
 def _normalize_model(model_value: str) -> str:
@@ -42,7 +45,11 @@ def _normalize_model(model_value: str) -> str:
     return f"anthropic:{model_value}"
 
 
-def _clip_text(value: Any, *, limit: int = 220) -> str:
+def _browser_model_name(model_value: str) -> str:
+    return model_value.split(":", 1)[1] if ":" in model_value else model_value
+
+
+def _clip_text(value: Any, *, limit: int = 300) -> str:
     text = str(value)
     if len(text) <= limit:
         return text
@@ -90,66 +97,10 @@ def _extract_final_text(output: Any) -> str:
         msg_type = getattr(msg, "type", None)
         if msg_type != "ai":
             continue
-        content = getattr(msg, "content", None)
-        text, _ = _extract_content_blocks(content)
-        text = text.strip()
-        if text:
-            return text
+        text, _ = _extract_content_blocks(getattr(msg, "content", None))
+        if text.strip():
+            return text.strip()
     return ""
-
-
-def _find_in_nested(value: Any, key: str) -> Any:
-    if isinstance(value, dict):
-        if key in value and value[key] is not None:
-            return value[key]
-        for nested in value.values():
-            found = _find_in_nested(nested, key)
-            if found is not None:
-                return found
-    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
-        for nested in value:
-            found = _find_in_nested(nested, key)
-            if found is not None:
-                return found
-    return None
-
-
-def _extract_tool_context(output: Any) -> dict[str, Any]:
-    data: dict[str, Any] = {"output_preview": _clip_text(output)}
-    screenshot = _find_in_nested(output, "screenshot")
-    url = _find_in_nested(output, "url")
-    if screenshot is None:
-        # MCP tool output is often a text block containing JSON.
-        text_blob = _find_in_nested(output, "text")
-        if isinstance(text_blob, str):
-            with suppress(Exception):
-                parsed = json.loads(text_blob)
-                screenshot = _find_in_nested(parsed, "screenshot")
-                url = url or _find_in_nested(parsed, "url")
-                parsed_preview = dict(parsed)
-                if "screenshot" in parsed_preview:
-                    parsed_preview["screenshot"] = "[omitted]"
-                data["output_preview"] = _clip_text(parsed_preview)
-    if screenshot is not None:
-        data["screenshot"] = screenshot
-    if url is not None:
-        data["url"] = url
-    return data
-
-
-def _sanitize_tool_input(value: Any) -> Any:
-    if isinstance(value, dict):
-        cleaned: dict[str, Any] = {}
-        for key, nested in value.items():
-            if key in {"runtime", "state", "messages"}:
-                continue
-            cleaned[key] = _sanitize_tool_input(nested)
-        return cleaned
-    if isinstance(value, list):
-        return [_sanitize_tool_input(item) for item in value][:20]
-    if isinstance(value, str):
-        return _clip_text(value, limit=180)
-    return value
 
 
 def _save_screenshot_file(raw: Any) -> str | None:
@@ -174,31 +125,31 @@ def _save_screenshot_file(raw: Any) -> str | None:
     return f"{SCREENSHOT_URL_PREFIX}/{filename}"
 
 
-def _patch_tool_schema_for_anthropic(tool: Any) -> None:
-    schema = getattr(tool, "args_schema", None)
-    if not isinstance(schema, dict):
-        return
-    for key in ("oneOf", "anyOf", "allOf"):
-        schema.pop(key, None)
+def _extract_browser_action_text(agent_output: Any) -> str:
+    with suppress(Exception):
+        actions = getattr(agent_output, "action", None)
+        if actions:
+            return _clip_text(actions[-1])
+    with suppress(Exception):
+        return _clip_text(getattr(agent_output, "next_goal", ""))
+    return "step completed"
 
 
-async def _anthropic_click_validator(
-    request: MCPToolCallRequest,
-    handler,
-) -> MCPToolCallResult:
-    if request["name"] != "browser_click":
-        return await handler(request)
-
-    args = request.get("args") or {}
-    has_index = args.get("index") is not None
-    has_x = args.get("coordinate_x") is not None
-    has_y = args.get("coordinate_y") is not None
-    has_coords = has_x and has_y
-    if has_index == has_coords:
-        raise ValueError(
-            "browser_click requires either {index} OR {coordinate_x, coordinate_y}."
-        )
-    return await handler(request)
+def _compact_browser_report(task: str, browser_result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task": _clip_text(task, limit=600),
+        "final_result": _clip_text(browser_result.get("final_result", ""), limit=2400),
+        "errors": [_clip_text(err, limit=280) for err in list(browser_result.get("errors", []))[-3:]],
+        "urls": [str(u) for u in list(browser_result.get("urls", []))[-6:]],
+        "steps": [
+            {
+                "step": s.get("step"),
+                "action": _clip_text(s.get("action", ""), limit=260),
+                "url": _clip_text(s.get("url", ""), limit=220),
+            }
+            for s in list(browser_result.get("steps", []))[-10:]
+        ],
+    }
 
 
 async def persist_message(
@@ -230,6 +181,27 @@ async def update_session_status(session_id: str, status: str) -> None:
         await db.commit()
 
 
+async def _load_recent_chat_messages(session_id: str, limit: int = MAX_CHAT_HISTORY) -> list[dict[str, str]]:
+    async with async_session() as db:
+        stmt = (
+            select(Message)
+            .where(
+                Message.session_id == session_id,
+                Message.role.in_(["user", "assistant"]),
+            )
+            .order_by(Message.timestamp.desc())
+            .limit(limit)
+        )
+        records = list((await db.exec(stmt)).all())
+
+    records.reverse()
+    result: list[dict[str, str]] = []
+    for record in records:
+        role = "assistant" if record.role == "assistant" else "user"
+        result.append({"role": role, "content": _clip_text(record.content, limit=4000)})
+    return result
+
+
 async def _emit(runtime: SessionRuntime, event: AgentEvent) -> None:
     if runtime.stream_state is None:
         runtime.stream_state = MessageStreamState()
@@ -256,8 +228,92 @@ async def _run_mock_task(runtime: SessionRuntime, user_message: str) -> None:
     await persist_message(runtime.session_id, "assistant", done.data["result"])
 
 
+async def _run_browser_delegate(runtime: SessionRuntime, task: str) -> dict[str, Any]:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is missing")
+
+    browser_model = _browser_model_name(BROWSER_AGENT_MODEL)
+    llm = ChatAnthropic(model=browser_model, api_key=api_key)
+    browser = BrowserSession(headless=HEADLESS)
+
+    steps: list[dict[str, Any]] = []
+
+    async def on_step(browser_state, agent_output, step_number: int) -> None:
+        url = getattr(browser_state, "url", None)
+        screenshot_url = _save_screenshot_file(getattr(browser_state, "screenshot", None))
+        action_text = _extract_browser_action_text(agent_output)
+
+        event_data = {
+            "name": "browser_use_step",
+            "output_preview": f"Step {step_number}: {action_text}",
+            "url": url,
+            "screenshot": screenshot_url,
+        }
+        await _emit(
+            runtime,
+            AgentEvent(
+                type="tool_end",
+                data=event_data,
+                timestamp=now_iso(),
+            ),
+        )
+
+        meta = {
+            "tool_name": "browser_use_step",
+            "tool_call_id": f"step-{step_number}",
+            "step": step_number,
+            "input": {"task": _clip_text(task, limit=180)},
+            "output_preview": event_data["output_preview"],
+            "url": url,
+            "screenshot": screenshot_url,
+        }
+        await persist_message(
+            runtime.session_id,
+            "tool",
+            content=event_data["output_preview"],
+            meta_json=json.dumps(meta),
+        )
+
+        steps.append(
+            {
+                "step": step_number,
+                "action": action_text,
+                "url": url,
+            }
+        )
+
+    agent = BrowserUseAgent(
+        task=task,
+        llm=llm,
+        browser_session=browser,
+        register_new_step_callback=on_step,
+    )
+
+    try:
+        history = await agent.run(max_steps=BROWSER_MAX_STEPS)
+    finally:
+        await browser.stop()
+
+    final_result = ""
+    with suppress(Exception):
+        final_result = str(history.final_result() or "")
+    errors: list[str] = []
+    with suppress(Exception):
+        errors = [str(e) for e in (history.errors() or []) if e]
+    urls: list[str] = []
+    with suppress(Exception):
+        urls = [str(u) for u in (history.urls() or []) if u]
+
+    return {
+        "final_result": final_result,
+        "errors": errors,
+        "urls": urls,
+        "steps": steps,
+    }
+
+
 async def run_agent_task(runtime: SessionRuntime, user_message: str) -> None:
-    global _TOOLS_LOGGED
     try:
         await update_session_status(runtime.session_id, "running")
         if runtime.stream_state is None:
@@ -269,130 +325,102 @@ async def run_agent_task(runtime: SessionRuntime, user_message: str) -> None:
             return
 
         model = init_chat_model(_normalize_model(AGENT_MODEL))
-        # Placeholder for future summarization middleware wiring.
         _ = SUMMARY_MODEL
 
-        tool_interceptors = []
-        if _normalize_model(AGENT_MODEL).startswith("anthropic:"):
-            tool_interceptors.append(_anthropic_click_validator)
+        @tool
+        async def run_browser_task(task: str) -> str:
+            """Run a web browsing task in a real browser and return a compact JSON report."""
+            browser_result = await _run_browser_delegate(runtime, task)
+            report = _compact_browser_report(task, browser_result)
+            await persist_message(
+                runtime.session_id,
+                "tool",
+                content=_clip_text(report.get("final_result", "") or "Browser task completed.", limit=350),
+                meta_json=json.dumps(
+                    {
+                        "tool_name": "run_browser_task",
+                        "tool_call_id": None,
+                        "input": {"task": _clip_text(task, limit=220)},
+                        "output_preview": _clip_text(report.get("final_result", "") or "Browser task completed.", limit=350),
+                        "url": (report.get("urls") or [None])[-1],
+                        "screenshot": None,
+                        "report": report,
+                    }
+                ),
+            )
+            return json.dumps(report, ensure_ascii=True)
 
-        mcp_client = MultiServerMCPClient(
-            {
-                "browser": {
-                    "transport": "stdio",
-                    "command": BROWSER_MCP_COMMAND,
-                    "args": BROWSER_MCP_ARGS,
-                    "env": {
-                        "BROWSER_USE_HEADLESS": "true" if HEADLESS else "false",
-                    },
-                }
-            },
-            tool_interceptors=tool_interceptors,
+        agent = create_agent(model=model, tools=[run_browser_task])
+
+        chat_history = await _load_recent_chat_messages(runtime.session_id)
+        system_prompt = (
+            "You are the user-facing assistant. "
+            "Use normal chat replies for requests that do not require fresh web interaction. "
+            "Call run_browser_task only when web browsing/search is needed to answer accurately. "
+            "If run_browser_task is used, incorporate its result into a direct final answer."
         )
 
         final_text = ""
-        tool_inputs: dict[str, dict[str, Any]] = {}
-        async with mcp_client.session("browser") as mcp_session:
-            tools = await load_mcp_tools(mcp_session, server_name="browser")
-            if _normalize_model(AGENT_MODEL).startswith("anthropic:"):
-                for tool in tools:
-                    _patch_tool_schema_for_anthropic(tool)
-            if not _TOOLS_LOGGED:
-                print(f"[agent] MCP tools loaded ({len(tools)}): {[tool.name for tool in tools]}")
-                _TOOLS_LOGGED = True
+        async for raw_event in agent.astream_events(
+            {
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    *chat_history,
+                ]
+            },
+            version="v2",
+        ):
+            kind = raw_event.get("event")
+            data = raw_event.get("data", {})
 
-            agent = create_agent(model=model, tools=tools)
-
-            async for raw_event in agent.astream_events(
-                {"messages": [{"role": "user", "content": user_message}]},
-                version="v2",
-            ):
-                kind = raw_event.get("event")
-                data = raw_event.get("data", {})
-
-                if kind == "on_chat_model_stream":
-                    text, thinking = _extract_chunk_parts(data.get("chunk"))
-                    if thinking:
-                        await _emit(
-                            runtime,
-                            AgentEvent(
-                                type="thinking",
-                                data={"text": thinking},
-                                timestamp=now_iso(),
-                            ),
-                        )
-                    if text:
-                        final_text += text
-                        await _emit(
-                            runtime,
-                            AgentEvent(
-                                type="token",
-                                data={"text": text},
-                                timestamp=now_iso(),
-                            ),
-                        )
-                elif kind == "on_tool_start":
-                    tool_name = str(raw_event.get("name", "tool"))
-                    raw_input = data.get("input", {})
-                    clean_input = _sanitize_tool_input(raw_input)
-                    run_id = str(raw_event.get("run_id", ""))
-                    if run_id:
-                        tool_inputs[run_id] = {
+            if kind == "on_chat_model_stream":
+                text, thinking = _extract_chunk_parts(data.get("chunk"))
+                if thinking:
+                    await _emit(
+                        runtime,
+                        AgentEvent(
+                            type="thinking",
+                            data={"text": thinking},
+                            timestamp=now_iso(),
+                        ),
+                    )
+                if text:
+                    final_text += text
+                    await _emit(
+                        runtime,
+                        AgentEvent(
+                            type="token",
+                            data={"text": text},
+                            timestamp=now_iso(),
+                        ),
+                    )
+            elif kind == "on_tool_start":
+                tool_name = str(raw_event.get("name", "tool"))
+                await _emit(
+                    runtime,
+                    AgentEvent(
+                        type="tool_start",
+                        data={"name": tool_name, "input": data.get("input", {})},
+                        timestamp=now_iso(),
+                    ),
+                )
+            elif kind == "on_tool_end":
+                tool_name = str(raw_event.get("name", "tool"))
+                await _emit(
+                    runtime,
+                    AgentEvent(
+                        type="tool_end",
+                        data={
                             "name": tool_name,
-                            "input": clean_input,
-                        }
-                    await _emit(
-                        runtime,
-                        AgentEvent(
-                            type="tool_start",
-                            data={
-                                "name": tool_name,
-                                "input": clean_input,
-                            },
-                            timestamp=now_iso(),
-                        ),
-                    )
-                elif kind == "on_tool_end":
-                    run_id = str(raw_event.get("run_id", ""))
-                    tool_payload = _extract_tool_context(data.get("output"))
-                    screenshot_url = _save_screenshot_file(tool_payload.get("screenshot"))
-                    if screenshot_url:
-                        tool_payload["screenshot"] = screenshot_url
-
-                    tool_name = str(raw_event.get("name", "tool"))
-                    input_meta = tool_inputs.pop(run_id, {})
-                    raw_output = data.get("output")
-                    tool_call_id = getattr(raw_output, "tool_call_id", None)
-                    meta = {
-                        "tool_name": tool_name,
-                        "tool_call_id": str(tool_call_id) if tool_call_id else None,
-                        "input": input_meta.get("input"),
-                        "output_preview": tool_payload.get("output_preview"),
-                        "url": tool_payload.get("url"),
-                        "screenshot": tool_payload.get("screenshot"),
-                    }
-                    await persist_message(
-                        runtime.session_id,
-                        "tool",
-                        content=str(tool_payload.get("output_preview", "")),
-                        meta_json=json.dumps(meta),
-                    )
-
-                    await _emit(
-                        runtime,
-                        AgentEvent(
-                            type="tool_end",
-                            data={
-                                "name": tool_name,
-                                **tool_payload,
-                            },
-                            timestamp=now_iso(),
-                        ),
-                    )
-                elif kind == "on_chain_end" and raw_event.get("name") == "LangGraph":
-                    extracted = _extract_final_text(data.get("output"))
-                    if extracted:
-                        final_text = extracted
+                            "output_preview": _clip_text(data.get("output", "completed"), limit=260),
+                        },
+                        timestamp=now_iso(),
+                    ),
+                )
+            elif kind == "on_chain_end" and raw_event.get("name") == "LangGraph":
+                extracted = _extract_final_text(data.get("output"))
+                if extracted:
+                    final_text = extracted
 
         final_text = final_text.strip() or "Task completed."
         done_event = AgentEvent(type="done", data={"result": final_text}, timestamp=now_iso())
@@ -411,6 +439,7 @@ async def run_agent_task(runtime: SessionRuntime, user_message: str) -> None:
         raise
 
     except Exception as exc:
+        logger.exception("Agent run failed for session_id=%s", runtime.session_id)
         err_event = AgentEvent(
             type="error",
             data={"error": str(exc)},
@@ -418,6 +447,3 @@ async def run_agent_task(runtime: SessionRuntime, user_message: str) -> None:
         )
         await _emit(runtime, err_event)
         await update_session_status(runtime.session_id, "error")
-    finally:
-        with suppress(Exception):
-            runtime.current_task = None

@@ -72,10 +72,10 @@ Set `APP_PASSWORD` in `.env`. The UI will prompt for a single password and sends
 
 - `AGENT_MODEL`: default `anthropic:claude-haiku-4-5-20251001`
 - `BROWSER_AGENT_MODEL`: default `claude-haiku-4-5-20251001` (direct `browser_use.Agent` model)
-- `SUMMARY_MODEL`: default `anthropic:claude-haiku-4-5-20251001` (reserved for summarization middleware wiring)
 - `AGENT_MODE`: `real` or `mock`
 - `HEADLESS`: `true`/`false`
 - `BROWSER_MAX_STEPS`: default `18`
+- `MAX_HISTORY_TOKENS`: default `12000` (approximate token budget for replayed chat history)
 - `SCREENSHOT_DIR`: default `/workspace/data/screenshots`
 - `SCREENSHOT_URL_PREFIX`: default `/api/files/screenshots`
 

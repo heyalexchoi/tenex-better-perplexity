@@ -3,408 +3,23 @@ import { ChatInput } from "./components/ChatInput"
 import { MessageFeed } from "./components/MessageFeed"
 import { ScreenshotModal } from "./components/ScreenshotModal"
 import { StatusIndicator } from "./components/StatusIndicator"
-import type { AgentEvent, FeedItem, Message, SessionStatus, ToolLine } from "./types"
-
-const LOCAL_AUTH_KEY = "bp_auth_token"
-const LOCAL_SESSION_KEY = "bp_session_id"
-
-function buildFeed(messages: Message[], events: AgentEvent[]): FeedItem[] {
-  const timeline: Array<
-    | { type: "user"; id: string; timestamp: string; content: string }
-    | { type: "assistant"; id: string; timestamp: string; content: string }
-    | { type: "tool"; id: string; timestamp: string; line: ToolLine }
-    | { type: "error"; id: string; timestamp: string; error: string }
-  > = []
-
-  for (const message of messages) {
-    if (message.role === "tool") {
-      let meta: Record<string, unknown> = {}
-      try {
-        meta = message.meta_json ? (JSON.parse(message.meta_json) as Record<string, unknown>) : {}
-      } catch {
-        meta = {}
-      }
-      const toolName = String(meta.tool_name ?? "tool")
-      const outputPreview = message.content.trim()
-      const label = outputPreview ? `${toolName}: ${outputPreview}` : `${toolName}: completed`
-      timeline.push({
-        type: "tool",
-        id: message.id,
-        timestamp: message.timestamp,
-        line: {
-          id: message.id,
-          label,
-          url: meta.url ? String(meta.url) : undefined,
-          screenshot: meta.screenshot ? String(meta.screenshot) : null,
-          timestamp: message.timestamp,
-        },
-      })
-      continue
-    }
-    timeline.push({
-      type: message.role === "assistant" ? "assistant" : "user",
-      id: message.id,
-      timestamp: message.timestamp,
-      content: message.content,
-    })
-  }
-
-  let stepCounter = 0
-  let liveAssistantText = ""
-  let liveTimestamp = ""
-  const pendingToolStarts: Record<string, { id: string; timestamp: string }> = {}
-
-  for (const event of events) {
-    if (event.type === "token") {
-      liveAssistantText += String(event.data.text ?? "")
-      liveTimestamp = event.timestamp
-      continue
-    }
-    if (event.type === "done") {
-      const result = String(event.data.result ?? "").trim()
-      if (result) {
-        liveAssistantText = result
-      }
-      liveTimestamp = event.timestamp
-      continue
-    }
-    if (event.type === "thinking") {
-      stepCounter += 1
-      timeline.push({
-        type: "tool",
-        id: `event-${event.id ?? crypto.randomUUID()}-${stepCounter}`,
-        timestamp: event.timestamp,
-        line: {
-          id: `event-${event.id ?? crypto.randomUUID()}-thinking-${stepCounter}`,
-          label: `thinking: ${String(event.data.text ?? "").trim()}`,
-          timestamp: event.timestamp,
-        },
-      })
-      continue
-    }
-    if (event.type === "tool_start") {
-      const name = String(event.data.name ?? "tool")
-      pendingToolStarts[name] = {
-        id: `event-${event.id ?? crypto.randomUUID()}-start`,
-        timestamp: event.timestamp,
-      }
-      continue
-    }
-    if (event.type === "tool_end") {
-      stepCounter += 1
-      const outputPreview = String(event.data.output_preview ?? "").trim()
-      const name = String(event.data.name ?? "tool")
-      delete pendingToolStarts[name]
-      timeline.push({
-        type: "tool",
-        id: `event-${event.id ?? crypto.randomUUID()}-${stepCounter}`,
-        timestamp: event.timestamp,
-        line: {
-          id: `event-${event.id ?? crypto.randomUUID()}-tool-${stepCounter}`,
-          label: outputPreview ? `${name}: ${outputPreview}` : `${name}: completed`,
-          url: event.data.url ? String(event.data.url) : undefined,
-          screenshot: event.data.screenshot ? String(event.data.screenshot) : null,
-          timestamp: event.timestamp,
-        },
-      })
-      continue
-    }
-    if (event.type === "error") {
-      timeline.push({
-        type: "error",
-        id: `event-${event.id ?? crypto.randomUUID()}`,
-        error: String(event.data.error ?? "Unexpected error"),
-        timestamp: event.timestamp,
-      })
-    }
-  }
-
-  for (const [name, pending] of Object.entries(pendingToolStarts)) {
-    timeline.push({
-      type: "tool",
-      id: pending.id,
-      timestamp: pending.timestamp,
-      line: {
-        id: `${pending.id}-line`,
-        label: `${name}: started...`,
-        timestamp: pending.timestamp,
-      },
-    })
-  }
-
-  if (liveAssistantText.trim()) {
-    timeline.push({
-      type: "assistant",
-      id: "live-assistant",
-      content: liveAssistantText,
-      timestamp: liveTimestamp || new Date().toISOString(),
-    })
-  }
-
-  timeline.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-
-  const feed: FeedItem[] = []
-  let assistantGroup:
-    | {
-        id: string
-        timestamp: string
-        content: string
-        toolLines: ToolLine[]
-      }
-    | null = null
-
-  const flushAssistantGroup = () => {
-    if (!assistantGroup) {
-      return
-    }
-    feed.push({
-      kind: "assistant",
-      id: assistantGroup.id,
-      content: assistantGroup.content,
-      toolLines: assistantGroup.toolLines.length ? assistantGroup.toolLines : undefined,
-      timestamp: assistantGroup.timestamp,
-    })
-    assistantGroup = null
-  }
-
-  for (const item of timeline) {
-    if (item.type === "user") {
-      flushAssistantGroup()
-      feed.push({
-        kind: "user",
-        id: item.id,
-        content: item.content,
-        timestamp: item.timestamp,
-      })
-      continue
-    }
-    if (item.type === "error") {
-      flushAssistantGroup()
-      feed.push({
-        kind: "error",
-        id: item.id,
-        error: item.error,
-        timestamp: item.timestamp,
-      })
-      continue
-    }
-    if (!assistantGroup) {
-      assistantGroup = {
-        id: `assistant-group-${item.id}`,
-        timestamp: item.timestamp,
-        content: "",
-        toolLines: [],
-      }
-    }
-    if (item.type === "tool") {
-      assistantGroup.toolLines.push(item.line)
-    } else if (item.type === "assistant") {
-      assistantGroup.content = assistantGroup.content
-        ? `${assistantGroup.content}\n${item.content}`
-        : item.content
-      assistantGroup.timestamp = item.timestamp
-    }
-  }
-  flushAssistantGroup()
-  return feed
-}
+import { useAuth } from "./hooks/useAuth"
+import { useChatSession } from "./hooks/useChatSession"
+import { buildFeed } from "./lib/buildFeed"
 
 export default function App() {
-  const [authToken, setAuthToken] = useState<string>("")
-  const [authChecked, setAuthChecked] = useState(false)
-  const [authError, setAuthError] = useState<string | null>(null)
+  const { authToken, authChecked, authError, checkAuth } = useAuth()
+  const { sessionId, messages, status, banner, loading, liveState, send, cancel, newSession } =
+    useChatSession(authToken, authChecked)
 
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
-  const [events, setEvents] = useState<AgentEvent[]>([])
-  const [status, setStatus] = useState<SessionStatus>("idle")
-  const [banner, setBanner] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [streaming, setStreaming] = useState(false)
   const [activeScreenshot, setActiveScreenshot] = useState<string | null>(null)
-
-  const streamRef = useRef<EventSource | null>(null)
   const feedEndRef = useRef<HTMLDivElement | null>(null)
 
-  const feed = useMemo(() => buildFeed(messages, events), [messages, events])
+  const feed = useMemo(() => buildFeed(messages, liveState), [messages, liveState])
 
-  const apiFetch = async (path: string, options: RequestInit = {}) => {
-    const headers = new Headers(options.headers)
-    if (!headers.has("content-type") && options.method && options.method !== "GET") {
-      headers.set("content-type", "application/json")
-    }
-    if (authToken) {
-      headers.set("x-auth", authToken)
-    }
-    return fetch(path, { ...options, headers })
-  }
+  const handleSend = async (text: string) => send(text)
 
-  const checkAuth = async (token: string, showErrors = true) => {
-    setAuthError(null)
-    const res = await fetch("/api/auth/check", {
-      method: "POST",
-      headers: token ? { "x-auth": token } : {},
-    })
-    if (res.ok) {
-      setAuthToken(token)
-      if (token) {
-        localStorage.setItem(LOCAL_AUTH_KEY, token)
-      } else {
-        localStorage.removeItem(LOCAL_AUTH_KEY)
-      }
-      setAuthChecked(true)
-      return true
-    }
-    if (showErrors) {
-      setAuthError("Password incorrect. Try again.")
-    }
-    setAuthChecked(false)
-    return false
-  }
-
-  const ensureSession = async () => {
-    setLoading(true)
-    const existing = localStorage.getItem(LOCAL_SESSION_KEY)
-    if (existing) {
-      const res = await apiFetch(`/api/sessions/${existing}`)
-      if (res.ok) {
-        const data = await res.json()
-        setSessionId(data.id)
-        setStatus(data.status)
-        setMessages(data.messages ?? [])
-        setEvents([])
-        setLoading(false)
-        return existing
-      }
-    }
-
-    const createRes = await apiFetch("/api/sessions", { method: "POST" })
-    const session = await createRes.json()
-    localStorage.setItem(LOCAL_SESSION_KEY, session.id)
-    setSessionId(session.id)
-    setStatus(session.status)
-    setMessages([])
-    setEvents([])
-    setLoading(false)
-    return session.id
-  }
-
-  const startStream = (id: string) => {
-    if (streamRef.current) {
-      streamRef.current.close()
-    }
-    const url = new URL(`/api/sessions/${id}/stream`, window.location.origin)
-    if (authToken) {
-      url.searchParams.set("auth", authToken)
-    }
-    const source = new EventSource(url.toString())
-    streamRef.current = source
-    setStreaming(true)
-
-    source.onmessage = (event) => {
-      const parsed = JSON.parse(event.data) as AgentEvent
-      if (parsed.type === "done") {
-        const result = String(parsed.data?.result ?? "").trim()
-        if (result) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `local-${crypto.randomUUID()}`,
-              session_id: id,
-              role: "assistant",
-              content: result,
-              timestamp: parsed.timestamp,
-            },
-          ])
-        }
-        setEvents([])
-        setStatus("idle")
-        setStreaming(false)
-        source.close()
-        return
-      }
-      if (parsed.type === "error") {
-        setEvents((prev) => [...prev, parsed])
-        setStatus("error")
-        setBanner(String(parsed.data?.error ?? "Agent error"))
-        setStreaming(false)
-        source.close()
-        return
-      }
-      setEvents((prev) => [...prev, parsed])
-    }
-    source.onerror = () => {
-      setBanner("Stream disconnected.")
-      setStreaming(false)
-      source.close()
-    }
-  }
-
-  const handleSend = async (text: string) => {
-    setBanner(null)
-    const id = sessionId ?? (await ensureSession())
-    setEvents([])
-    setStatus("running")
-
-    const res = await apiFetch(`/api/sessions/${id}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ content: text }),
-    })
-    if (!res.ok) {
-      if (res.status === 409) {
-        setBanner("Agent is already running.")
-      } else if (res.status === 401) {
-        setBanner("Unauthorized. Check your password.")
-      } else {
-        setBanner("Failed to send message.")
-      }
-      setStatus("error")
-      return
-    }
-    const message = (await res.json()) as Message
-    setMessages((prev) => [...prev, message])
-    startStream(id)
-  }
-
-  const handleCancel = async () => {
-    if (!sessionId) {
-      return
-    }
-    await apiFetch(`/api/sessions/${sessionId}`, { method: "DELETE" })
-    setStatus("idle")
-    setStreaming(false)
-  }
-
-  useEffect(() => {
-    const saved = localStorage.getItem(LOCAL_AUTH_KEY) ?? ""
-    if (!saved) {
-      setAuthChecked(false)
-      setAuthError(null)
-      return
-    }
-    checkAuth(saved, false)
-  }, [])
-
-  useEffect(() => {
-    if (!authChecked) {
-      return
-    }
-    ensureSession()
-  }, [authChecked])
-
-  useEffect(() => {
-    if (sessionId && status === "running" && !streaming) {
-      startStream(sessionId)
-    }
-  }, [sessionId, status, streaming])
-
-  useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.close()
-      }
-    }
-  }, [])
+  const handleCancel = async () => cancel()
 
   useEffect(() => {
     feedEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -421,6 +36,14 @@ export default function App() {
             <h1 className="font-display text-2xl text-ink-900 md:text-3xl">Browser Agent</h1>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void newSession()}
+              className="rounded-xl border border-fog-200 bg-white/80 px-3 py-2 text-xs font-semibold text-ink-800 transition hover:bg-white disabled:opacity-50"
+              disabled={!authChecked || status === "running"}
+            >
+              New Session
+            </button>
             <StatusIndicator status={status} />
           </div>
         </header>
@@ -438,7 +61,7 @@ export default function App() {
                 const form = event.currentTarget
                 const data = new FormData(form)
                 const token = String(data.get("password") || "")
-                checkAuth(token, true)
+                void checkAuth(token, true)
               }}
             >
               <input

@@ -2,6 +2,7 @@ import type { ToolLine } from "../types"
 
 type AgentMessageProps = {
   content: string
+  thinking?: string
   toolLines?: ToolLine[]
   timestamp: string
   onOpenScreenshot: (src: string) => void
@@ -17,10 +18,13 @@ function resolveScreenshotSrc(raw?: string | null) {
   return `data:image/png;base64,${raw}`
 }
 
-export function AgentMessage({ content, toolLines, timestamp, onOpenScreenshot }: AgentMessageProps) {
+export function AgentMessage({ content, thinking, toolLines, timestamp, onOpenScreenshot }: AgentMessageProps) {
   return (
     <div className="flex justify-start">
       <div className="max-w-[72%] rounded-2xl border border-fog-200 bg-white/80 px-4 py-3 text-sm text-ink-900 shadow-sm">
+        {thinking?.trim() ? (
+          <div className="mb-3 rounded-lg bg-fog-50 px-3 py-2 text-xs italic text-fog-400">{thinking}</div>
+        ) : null}
         {toolLines?.length ? (
           <div className="mb-3 space-y-2 border-b border-fog-100 pb-3 text-xs text-fog-500">
             {toolLines.map((line) => {

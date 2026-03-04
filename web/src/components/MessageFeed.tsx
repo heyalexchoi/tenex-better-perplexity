@@ -19,6 +19,7 @@ export function MessageFeed({ items, onOpenScreenshot }: MessageFeedProps) {
             <AgentMessage
               key={item.id}
               content={item.content}
+              thinking={item.thinking}
               toolLines={item.toolLines}
               timestamp={item.timestamp}
               onOpenScreenshot={onOpenScreenshot}

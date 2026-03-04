@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from server.agent_runner import run_agent_task
+from server.agent import run_agent_task
 from server.auth import require_auth
 from server.database import check_db_ready, get_session
 from server.models import Message, MessageCreate, Session, SessionResponse
@@ -121,7 +121,7 @@ async def create_message(
     db.add(session)
     await db.commit()
 
-    runtime.current_task = asyncio.create_task(run_agent_task(runtime, payload.content))
+    runtime.current_task = asyncio.create_task(run_agent_task(runtime))
     return message
 
 

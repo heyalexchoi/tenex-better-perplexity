@@ -12,7 +12,7 @@ export type Message = {
 export type AgentEvent = {
   id?: number
   session_id?: string
-  type: "token" | "thinking" | "tool_start" | "tool_end" | "done" | "error"
+  type: "token" | "thinking" | "tool_start" | "tool_progress" | "tool_end" | "done" | "error"
   data: Record<string, unknown>
   timestamp: string
 }
@@ -36,6 +36,7 @@ export type FeedItem =
       kind: "assistant"
       id: string
       content: string
+      thinking?: string
       toolLines?: ToolLine[]
       timestamp: string
     }

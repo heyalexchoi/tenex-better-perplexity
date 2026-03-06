@@ -34,17 +34,6 @@ class Message(SQLModel, table=True):
     )
 
 
-class AgentEventRecord(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: str = Field(foreign_key="session.id", index=True)
-    type: str
-    data: str
-    timestamp: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
-    )
-
-
 class MessageCreate(SQLModel):
     content: str
 
@@ -55,4 +44,3 @@ class SessionResponse(SQLModel):
     status: str
     active_run_id: Optional[str] = None
     messages: list[Message] = Field(default_factory=list)
-    events: list[AgentEventRecord] = Field(default_factory=list)

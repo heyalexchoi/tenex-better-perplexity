@@ -24,17 +24,7 @@ def upgrade() -> None:
         sa.Column("content", sa.String(), nullable=False),
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_table(
-        "agenteventrecord",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("session_id", sa.String(), sa.ForeignKey("session.id"), nullable=False, index=True),
-        sa.Column("type", sa.String(), nullable=False),
-        sa.Column("data", sa.Text(), nullable=False),
-        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
-    )
-
 
 def downgrade() -> None:
-    op.drop_table("agenteventrecord")
     op.drop_table("message")
     op.drop_table("session")

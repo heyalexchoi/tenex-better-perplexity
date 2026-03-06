@@ -63,7 +63,6 @@ async def create_session(db: AsyncSession = Depends(get_session)) -> SessionResp
         status=session.status,
         active_run_id=None,
         messages=[],
-        events=[],
     )
 
 
@@ -85,17 +84,7 @@ async def get_session_data(session_id: str, db: AsyncSession = Depends(get_sessi
         status=session.status,
         active_run_id=active_run_id,
         messages=messages,
-        events=[],
     )
-
-
-@router.get("/sessions/{session_id}/events")
-async def get_session_events(session_id: str, db: AsyncSession = Depends(get_session)) -> list[dict]:
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    # Stream events are transient and only kept in-memory for the current response.
-    return []
 
 
 @router.post("/sessions/{session_id}/messages")

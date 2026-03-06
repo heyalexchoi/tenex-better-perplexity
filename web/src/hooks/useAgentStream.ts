@@ -4,7 +4,7 @@ import type { LiveState } from "../lib/buildFeed"
 
 type UseAgentStreamOptions = {
   authToken: string
-  onDone: (result: string, timestamp: string, sessionId: string) => void
+  onDone: (result: string, timestamp: string, sessionId: string, runId: string) => void | Promise<void>
   onError: (message: string) => void
 }
 
@@ -12,6 +12,7 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
   const [streaming, setStreaming] = useState(false)
   const [liveState, setLiveState] = useState<LiveState | null>(null)
   const streamRef = useRef<EventSource | null>(null)
+  const liveToolSeqRef = useRef(0)
 
   const stopStream = useCallback(() => {
     if (streamRef.current) {
@@ -26,24 +27,26 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
   }, [])
 
   const startStream = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, runId: string) => {
       if (streamRef.current) {
         streamRef.current.close()
       }
 
       const url = new URL(`/api/sessions/${sessionId}/stream`, window.location.origin)
+      url.searchParams.set("run_id", runId)
       if (authToken) {
         url.searchParams.set("auth", authToken)
       }
 
       const source = new EventSource(url.toString())
       streamRef.current = source
+      liveToolSeqRef.current = 0
       setStreaming(true)
       setLiveState({
         assistantText: "",
         thinkingText: "",
         timestamp: new Date().toISOString(),
-        activeToolLine: null,
+        toolLines: [],
       })
 
       source.onmessage = (event) => {
@@ -58,7 +61,7 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
             assistantText: `${prev?.assistantText ?? ""}${text}`,
             thinkingText: prev?.thinkingText ?? "",
             timestamp: parsed.timestamp,
-            activeToolLine: prev?.activeToolLine ?? null,
+            toolLines: prev?.toolLines ?? [],
           }))
           return
         }
@@ -74,22 +77,26 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
               ? `${prev.thinkingText}\n${text}`
               : text,
             timestamp: parsed.timestamp,
-            activeToolLine: prev?.activeToolLine ?? null,
+            toolLines: prev?.toolLines ?? [],
           }))
           return
         }
 
         if (parsed.type === "tool_start") {
           const name = String(parsed.data?.name ?? "tool")
+          const id = `live-tool-${++liveToolSeqRef.current}`
           setLiveState((prev) => ({
             assistantText: prev?.assistantText ?? "",
             thinkingText: prev?.thinkingText ?? "",
             timestamp: parsed.timestamp,
-            activeToolLine: {
-              id: `live-tool-${name}`,
-              label: `${name}: running...`,
-              timestamp: parsed.timestamp,
-            },
+            toolLines: [
+              ...(prev?.toolLines ?? []),
+              {
+                id,
+                label: `${name}: running...`,
+                timestamp: parsed.timestamp,
+              },
+            ],
           }))
           return
         }
@@ -97,17 +104,21 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
         if (parsed.type === "tool_progress") {
           const name = String(parsed.data?.name ?? "tool")
           const outputPreview = String(parsed.data?.output_preview ?? "").trim()
+          const id = `live-tool-${++liveToolSeqRef.current}`
           setLiveState((prev) => ({
             assistantText: prev?.assistantText ?? "",
             thinkingText: prev?.thinkingText ?? "",
             timestamp: parsed.timestamp,
-            activeToolLine: {
-              id: `live-tool-${name}`,
-              label: outputPreview ? `${name}: ${outputPreview}` : `${name}: running...`,
-              url: parsed.data?.url ? String(parsed.data.url) : undefined,
-              screenshot: parsed.data?.screenshot ? String(parsed.data.screenshot) : null,
-              timestamp: parsed.timestamp,
-            },
+            toolLines: [
+              ...(prev?.toolLines ?? []),
+              {
+                id,
+                label: outputPreview ? `${name}: ${outputPreview}` : `${name}: running...`,
+                url: parsed.data?.url ? String(parsed.data.url) : undefined,
+                screenshot: parsed.data?.screenshot ? String(parsed.data.screenshot) : null,
+                timestamp: parsed.timestamp,
+              },
+            ],
           }))
           return
         }
@@ -115,28 +126,34 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
         if (parsed.type === "tool_end") {
           const name = String(parsed.data?.name ?? "tool")
           const outputPreview = String(parsed.data?.output_preview ?? "").trim()
+          const id = `live-tool-${++liveToolSeqRef.current}`
           setLiveState((prev) => ({
             assistantText: prev?.assistantText ?? "",
             thinkingText: prev?.thinkingText ?? "",
             timestamp: parsed.timestamp,
-            activeToolLine: {
-              id: `live-tool-${name}`,
-              label: outputPreview ? `${name}: ${outputPreview}` : `${name}: completed`,
-              url: parsed.data?.url ? String(parsed.data.url) : undefined,
-              screenshot: parsed.data?.screenshot ? String(parsed.data.screenshot) : null,
-              timestamp: parsed.timestamp,
-            },
+            toolLines: [
+              ...(prev?.toolLines ?? []),
+              {
+                id,
+                label: outputPreview ? `${name}: ${outputPreview}` : `${name}: completed`,
+                url: parsed.data?.url ? String(parsed.data.url) : undefined,
+                screenshot: parsed.data?.screenshot ? String(parsed.data.screenshot) : null,
+                timestamp: parsed.timestamp,
+              },
+            ],
           }))
           return
         }
 
         if (parsed.type === "done") {
           const result = String(parsed.data?.result ?? "")
-          onDone(result, parsed.timestamp, sessionId)
-          setLiveState(null)
           setStreaming(false)
           source.close()
           streamRef.current = null
+          void Promise.resolve(onDone(result, parsed.timestamp, sessionId, runId)).catch((error) => {
+            const message = error instanceof Error ? error.message : "Failed to reconcile completed run."
+            onError(message)
+          })
           return
         }
 

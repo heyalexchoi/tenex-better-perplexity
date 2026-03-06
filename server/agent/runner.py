@@ -74,7 +74,8 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
         system_prompt = (
             "You are the user-facing web research chat assistant. "
             "Use normal chat replies for requests that do not require fresh web interaction. "
-            "Call run_browser_task only when web browsing/search is needed to answer accurately. "
+            "Call run_browser_task ONLY when web browsing/search is needed to answer accurately. "
+            "If you have enough information from previous web browsing / search calls to answer questions accurately, then do not make more tool calls "
             "If run_browser_task is used, incorporate its result into a direct final answer."
         )
         agent = create_agent(model=model, tools=[run_browser_task], system_prompt=system_prompt)
@@ -82,7 +83,6 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
 
         final_text = ""
         seen_assistant_messages: set[str] = set()
-        final_persisted = False
 
         async for raw_event in agent.astream_events({"messages": chat_history}, version="v2"):
             kind = raw_event.get("event")
@@ -136,27 +136,21 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
                     meta_json=json.dumps({"message_id": message_id, "tool_calls": tool_calls}),
                 )
             elif text:
-                await persist_message(
-                    runtime.session_id,
-                    "assistant",
-                    content=text,
-                    meta_json=json.dumps({"message_id": message_id}),
-                )
-                final_persisted = True
                 final_text = text
 
         final_text = final_text.strip() or "Task completed."
-        await emit_done(runtime, final_text)
-        if not final_persisted:
-            await persist_message(runtime.session_id, "assistant", final_text)
+        await persist_message(runtime.session_id, "assistant", final_text)
         await update_session_status(runtime.session_id, "idle")
+        await emit_done(runtime, final_text)
 
     except asyncio.CancelledError:
+        await persist_message(runtime.session_id, "assistant", "Task cancelled.")
         await emit_error(runtime, "Task cancelled")
         await update_session_status(runtime.session_id, "idle")
         raise
 
     except Exception as exc:
+        await persist_message(runtime.session_id, "assistant", f"Task failed: {exc}")
         logger.exception("Agent run failed for session_id=%s", runtime.session_id)
         await emit_error(runtime, str(exc))
         await update_session_status(runtime.session_id, "error")

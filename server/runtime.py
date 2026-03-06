@@ -14,11 +14,12 @@ class AgentEvent:
 
 @dataclass
 class MessageStreamState:
-    # Buffer for the current in-progress assistant message only.
+    # Event buffer for a single run.
     events: list[AgentEvent] = field(default_factory=list)
     assistant_text: str = ""
     current_tool: dict | None = None
     closed: bool = False
+    run_id: str | None = None
     _condition: Condition = field(default_factory=Condition, repr=False)
 
     async def publish(self, event: AgentEvent) -> None:
@@ -51,10 +52,11 @@ class MessageStreamState:
 class SessionRuntime:
     session_id: str
     current_task: Task | None = None
-    stream_state: MessageStreamState | None = None
+    active_run_id: str | None = None
 
 
 active_sessions: dict[str, SessionRuntime] = {}
+run_streams: dict[str, tuple[str, MessageStreamState]] = {}
 
 
 def now_iso() -> str:

@@ -1,16 +1,18 @@
 import { useCallback, useState } from "react"
 import { apiFetch } from "../lib/api"
-import type { Message, SessionStatus } from "../types"
+import type { CreateMessageResponse, Message, SessionStatus } from "../types"
 
 const LOCAL_SESSION_KEY = "bp_session_id"
 
 type EnsureSessionResult = {
   id: string
   status: SessionStatus
+  activeRunId: string | null
 }
 
 type SendMessageResult = {
   sessionId: string | null
+  runId: string | null
   error: string | null
 }
 
@@ -25,7 +27,11 @@ export function useSession(authToken: string) {
     localStorage.setItem(LOCAL_SESSION_KEY, session.id)
     setSessionId(session.id)
     setMessages([])
-    return { id: session.id as string, status: (session.status as SessionStatus) ?? "idle" }
+    return {
+      id: session.id as string,
+      status: (session.status as SessionStatus) ?? "idle",
+      activeRunId: (session.active_run_id as string | null) ?? null,
+    }
   }, [authToken])
 
   const ensureSession = useCallback(async (): Promise<EnsureSessionResult> => {
@@ -38,7 +44,11 @@ export function useSession(authToken: string) {
         setSessionId(data.id)
         setMessages(data.messages ?? [])
         setLoading(false)
-        return { id: data.id as string, status: (data.status as SessionStatus) ?? "idle" }
+        return {
+          id: data.id as string,
+          status: (data.status as SessionStatus) ?? "idle",
+          activeRunId: (data.active_run_id as string | null) ?? null,
+        }
       }
     }
 
@@ -63,38 +73,20 @@ export function useSession(authToken: string) {
 
       if (!res.ok) {
         if (res.status === 409) {
-          return { sessionId: null, error: "Agent is already running." }
+          return { sessionId: null, runId: null, error: "Agent is already running." }
         }
         if (res.status === 401) {
-          return { sessionId: null, error: "Unauthorized. Check your password." }
+          return { sessionId: null, runId: null, error: "Unauthorized. Check your password." }
         }
-        return { sessionId: null, error: "Failed to send message." }
+        return { sessionId: null, runId: null, error: "Failed to send message." }
       }
 
-      const message = (await res.json()) as Message
-      setMessages((prev) => [...prev, message])
-      return { sessionId: id, error: null }
+      const payload = (await res.json()) as CreateMessageResponse
+      setMessages((prev) => [...prev, payload.user_message])
+      return { sessionId: id, runId: payload.run_id, error: null }
     },
     [authToken, ensureSession, sessionId],
   )
-
-  const appendAssistantMessage = useCallback((id: string, content: string, timestamp: string) => {
-    const text = content.trim()
-    if (!text) {
-      return
-    }
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `local-${crypto.randomUUID()}`,
-        session_id: id,
-        role: "assistant",
-        content: text,
-        timestamp,
-      },
-    ])
-  }, [])
 
   const cancelRun = useCallback(async () => {
     if (!sessionId) {
@@ -109,7 +101,6 @@ export function useSession(authToken: string) {
     loading,
     ensureSession,
     sendUserMessage,
-    appendAssistantMessage,
     cancelRun,
     createNewSession,
   }

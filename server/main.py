@@ -5,6 +5,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,7 @@ from server.agent import run_agent_task
 from server.auth import require_auth
 from server.database import check_db_ready, get_session
 from server.models import Message, MessageCreate, Session, SessionResponse
-from server.runtime import MessageStreamState, SessionRuntime, active_sessions, event_to_dict
+from server.runtime import MessageStreamState, SessionRuntime, active_sessions, event_to_dict, run_streams
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -60,6 +61,7 @@ async def create_session(db: AsyncSession = Depends(get_session)) -> SessionResp
         id=session.id,
         created_at=session.created_at,
         status=session.status,
+        active_run_id=None,
         messages=[],
         events=[],
     )
@@ -75,10 +77,13 @@ async def get_session_data(session_id: str, db: AsyncSession = Depends(get_sessi
         (await db.exec(select(Message).where(Message.session_id == session_id).order_by(Message.timestamp.asc())))
         .all()
     )
+    runtime = active_sessions.get(session_id)
+    active_run_id = runtime.active_run_id if runtime else None
     return SessionResponse(
         id=session.id,
         created_at=session.created_at,
         status=session.status,
+        active_run_id=active_run_id,
         messages=messages,
         events=[],
     )
@@ -98,15 +103,10 @@ async def create_message(
     session_id: str,
     payload: MessageCreate,
     db: AsyncSession = Depends(get_session),
-) -> Message:
+) -> dict:
     session = await db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-
-    message = Message(session_id=session_id, role="user", content=payload.content)
-    db.add(message)
-    await db.commit()
-    await db.refresh(message)
 
     runtime = active_sessions.get(session_id)
     if runtime is None:
@@ -116,21 +116,39 @@ async def create_message(
     if runtime.current_task and not runtime.current_task.done():
         raise HTTPException(status_code=409, detail="Agent is already running")
 
-    runtime.stream_state = MessageStreamState()
+    user_message = Message(session_id=session_id, role="user", content=payload.content)
+    db.add(user_message)
+    await db.commit()
+    await db.refresh(user_message)
+
+    run_id = uuid4().hex
+    previous_run_id = runtime.active_run_id
+    if previous_run_id:
+        run_streams.pop(previous_run_id, None)
+
+    runtime.active_run_id = run_id
+    run_streams[run_id] = (session_id, MessageStreamState(
+        run_id=run_id,
+    ))
     session.status = "running"
     db.add(session)
     await db.commit()
 
     runtime.current_task = asyncio.create_task(run_agent_task(runtime))
-    return message
+    return {
+        "user_message": user_message.model_dump(mode="json"),
+        "run_id": run_id,
+    }
 
 
 @router.get("/sessions/{session_id}/stream")
-async def stream_session(session_id: str):
-    runtime = active_sessions.get(session_id)
-    if runtime is None or runtime.stream_state is None:
-        raise HTTPException(status_code=404, detail="No active agent run")
-    state = runtime.stream_state
+async def stream_session(session_id: str, run_id: str):
+    stream_entry = run_streams.get(run_id)
+    if stream_entry is None:
+        raise HTTPException(status_code=404, detail="Run stream not found")
+    stream_session_id, state = stream_entry
+    if stream_session_id != session_id:
+        raise HTTPException(status_code=404, detail="Run stream not found for this session")
 
     async def event_generator():
         cursor = 0

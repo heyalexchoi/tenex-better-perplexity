@@ -18,8 +18,9 @@ cp .env.example .env
 
 ## Dev
 ```
-# codex yolo in workspace, only run in dev container
+# codex / claude yolo in workspace, only run in dev container
 codex --yolo resume
+claude --dangerously-skip-permissions --resume
 ```
 
 ## Running

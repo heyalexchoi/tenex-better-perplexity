@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from server.runtime import AgentEvent, MessageStreamState, SessionRuntime, now_iso
+from server.runtime import AgentEvent, SessionRuntime, now_iso, run_streams
 
 
 async def emit(runtime: SessionRuntime, event: AgentEvent) -> None:
-    if runtime.stream_state is None:
-        runtime.stream_state = MessageStreamState()
-    await runtime.stream_state.publish(event)
+    run_id = runtime.active_run_id
+    if not run_id:
+        return
+    stream_entry = run_streams.get(run_id)
+    if stream_entry is None:
+        return
+    _, stream_state = stream_entry
+    if "run_id" not in event.data:
+        event.data["run_id"] = run_id
+    await stream_state.publish(event)
 
 
 def tool_event_data(

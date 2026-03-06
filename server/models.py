@@ -53,5 +53,6 @@ class SessionResponse(SQLModel):
     id: str
     created_at: datetime
     status: str
+    active_run_id: Optional[str] = None
     messages: list[Message] = Field(default_factory=list)
     events: list[AgentEventRecord] = Field(default_factory=list)

@@ -17,7 +17,6 @@ export function useChatSession(authToken: string, authChecked: boolean) {
     ensureSession,
     createNewSession,
     sendUserMessage,
-    appendAssistantMessage,
     cancelRun,
   } = useSession(authToken)
   const [status, setStatus] = useState<SessionStatus>("idle")
@@ -32,11 +31,10 @@ export function useChatSession(authToken: string, authChecked: boolean) {
   }, [])
 
   const handleStreamDone = useCallback(
-    (result: string, timestamp: string, id: string) => {
-      appendAssistantMessage(id, result, timestamp)
+    async (_result: string, _timestamp: string, _id: string, _runId: string) => {
       setStatus("idle")
     },
-    [appendAssistantMessage],
+    [],
   )
 
   const handleStreamError = useCallback(
@@ -58,15 +56,15 @@ export function useChatSession(authToken: string, authChecked: boolean) {
       clearErrors()
       resetLiveState()
 
-      const { sessionId: resolvedSessionId, error } = await sendUserMessage(text)
-      if (error || !resolvedSessionId) {
+      const { sessionId: resolvedSessionId, runId, error } = await sendUserMessage(text)
+      if (error || !resolvedSessionId || !runId) {
         pushError("session", error ?? "Failed to send message.")
         setStatus("error")
         return
       }
 
       setStatus("running")
-      startStream(resolvedSessionId)
+      startStream(resolvedSessionId, runId)
     },
     [clearErrors, pushError, resetLiveState, sendUserMessage, startStream],
   )
@@ -94,17 +92,11 @@ export function useChatSession(authToken: string, authChecked: boolean) {
     void (async () => {
       const resolved = await ensureSession()
       setStatus(resolved.status)
-      if (resolved.status === "running") {
-        startStream(resolved.id)
+      if (resolved.status === "running" && resolved.activeRunId) {
+        startStream(resolved.id, resolved.activeRunId)
       }
     })()
   }, [authChecked, ensureSession, resetLiveState, sessionId, startStream])
-
-  useEffect(() => {
-    if (sessionId && status === "running" && !streaming) {
-      startStream(sessionId)
-    }
-  }, [sessionId, startStream, status, streaming])
 
   const banner = useMemo(() => {
     if (!errors.length) {

@@ -24,4 +24,4 @@ RUN playwright install chromium --with-deps
 # Install Claude Code and Codex globally
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

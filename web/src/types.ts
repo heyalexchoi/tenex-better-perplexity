@@ -9,6 +9,11 @@ export type Message = {
   timestamp: string
 }
 
+export type CreateMessageResponse = {
+  user_message: Message
+  run_id: string
+}
+
 export type AgentEvent = {
   id?: number
   session_id?: string
@@ -25,6 +30,22 @@ export type ToolLine = {
   timestamp: string
 }
 
+export type AssistantPart =
+  | {
+      kind: "text"
+      text: string
+    }
+  | {
+      kind: "thinking"
+      text: string
+    }
+  | {
+      kind: "tool_group"
+      id: string
+      label: string
+      lines: ToolLine[]
+    }
+
 export type FeedItem =
   | {
       kind: "user"
@@ -35,9 +56,7 @@ export type FeedItem =
   | {
       kind: "assistant"
       id: string
-      content: string
-      thinking?: string
-      toolLines?: ToolLine[]
+      parts: AssistantPart[]
       timestamp: string
     }
   | {

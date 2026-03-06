@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
-
-from server.agent.history import clip_text
 
 
 def extract_content_blocks(content: Any) -> tuple[str, str]:
@@ -76,13 +73,3 @@ def extract_ai_message_payload(event_output: Any) -> tuple[str, list[dict[str, A
                 }
             )
     return text.strip(), tool_calls, str(message_id) if message_id else None
-
-
-def render_tool_call_summary(tool_calls: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for call in tool_calls:
-        name = str(call.get("name", "tool"))
-        args = call.get("args", {})
-        arg_text = clip_text(json.dumps(args, ensure_ascii=True), limit=260)
-        lines.append(f"Calling {name} with {arg_text}")
-    return "\n".join(lines)

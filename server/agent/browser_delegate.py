@@ -106,6 +106,7 @@ async def run_browser_delegate(
         llm=llm,
         browser_session=browser,
         register_new_step_callback=on_step,
+        extend_system_message="google is unavailable in your environment. do not navigate to google. use your search tool for searches."
     )
 
     try:

@@ -10,10 +10,7 @@ from typing import Annotated
 from langchain.chat_models import init_chat_model
 from langchain_core.tools import InjectedToolCallId, tool
 
-try:
-    from langchain.agents import create_agent
-except ImportError:  # pragma: no cover
-    from langchain.agents import create_react_agent as create_agent
+from langchain.agents import create_agent
 
 from server.agent.browser_delegate import compact_browser_report, run_browser_delegate
 from server.agent.events import (
@@ -29,7 +26,6 @@ from server.agent.llm_output import (
     extract_ai_message_payload,
     extract_chunk_parts,
     extract_final_text,
-    render_tool_call_summary,
 )
 from server.agent.settings import get_settings, normalize_model
 from server.runtime import SessionRuntime
@@ -132,7 +128,7 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
                 await persist_message(
                     runtime.session_id,
                     "assistant",
-                    content=render_tool_call_summary(tool_calls),
+                    content=text,
                     meta_json=json.dumps({"message_id": message_id, "tool_calls": tool_calls}),
                 )
             elif text:

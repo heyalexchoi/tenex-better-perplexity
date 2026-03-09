@@ -1,13 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import type { SessionStatus } from "../types"
 import { useAgentStream } from "./useAgentStream"
 import { useSession } from "./useSession"
-
-type ChatError = {
-  source: "session" | "stream"
-  message: string
-  timestamp: string
-}
 
 export function useChatSession(authToken: string, authChecked: boolean) {
   const {
@@ -18,55 +12,44 @@ export function useChatSession(authToken: string, authChecked: boolean) {
     createNewSession,
     sendUserMessage,
     cancelRun,
+    refreshMessages,
   } = useSession(authToken)
   const [status, setStatus] = useState<SessionStatus>("idle")
-  const [errors, setErrors] = useState<ChatError[]>([])
+  const [error, setError] = useState<string | null>(null)
 
-  const pushError = useCallback((source: ChatError["source"], message: string) => {
-    setErrors((prev) => [...prev, { source, message, timestamp: new Date().toISOString() }])
-  }, [])
+  const { liveState, startStream, stopStream, resetLiveState } = useAgentStream(authToken)
 
-  const clearErrors = useCallback(() => {
-    setErrors([])
-  }, [])
-
-  const handleStreamDone = useCallback(
-    async (_result: string, _timestamp: string, _id: string, _runId: string) => {
-      setStatus("idle")
-    },
-    [],
+  const streamCallbacks = useCallback(
+    () => ({
+      onDone: async () => {
+        await refreshMessages()
+        resetLiveState()
+        setStatus("idle")
+      },
+      onError: (message: string) => {
+        setError(message)
+        setStatus("error")
+      },
+    }),
+    [refreshMessages, resetLiveState],
   )
-
-  const handleStreamError = useCallback(
-    (message: string) => {
-      pushError("stream", message)
-      setStatus("error")
-    },
-    [pushError],
-  )
-
-  const { streaming, liveState, startStream, stopStream, resetLiveState } = useAgentStream({
-    authToken,
-    onDone: handleStreamDone,
-    onError: handleStreamError,
-  })
 
   const send = useCallback(
     async (text: string) => {
-      clearErrors()
+      setError(null)
       resetLiveState()
 
-      const { sessionId: resolvedSessionId, runId, error } = await sendUserMessage(text)
-      if (error || !resolvedSessionId || !runId) {
-        pushError("session", error ?? "Failed to send message.")
+      const { sessionId: resolvedSessionId, runId, error: sendError } = await sendUserMessage(text)
+      if (sendError || !resolvedSessionId || !runId) {
+        setError(sendError ?? "Failed to send message.")
         setStatus("error")
         return
       }
 
       setStatus("running")
-      startStream(resolvedSessionId, runId)
+      startStream(resolvedSessionId, runId, streamCallbacks())
     },
-    [clearErrors, pushError, resetLiveState, sendUserMessage, startStream],
+    [resetLiveState, sendUserMessage, startStream, streamCallbacks],
   )
 
   const cancel = useCallback(async () => {
@@ -79,40 +62,29 @@ export function useChatSession(authToken: string, authChecked: boolean) {
   const newSession = useCallback(async () => {
     stopStream()
     resetLiveState()
-    clearErrors()
+    setError(null)
     const created = await createNewSession()
     setStatus(created.status)
-  }, [clearErrors, createNewSession, resetLiveState, stopStream])
+  }, [createNewSession, resetLiveState, stopStream])
 
   useEffect(() => {
-    if (!authChecked || sessionId) {
-      return
-    }
+    if (!authChecked || sessionId) return
     resetLiveState()
     void (async () => {
       const resolved = await ensureSession()
       setStatus(resolved.status)
       if (resolved.status === "running" && resolved.activeRunId) {
-        startStream(resolved.id, resolved.activeRunId)
+        startStream(resolved.id, resolved.activeRunId, streamCallbacks())
       }
     })()
-  }, [authChecked, ensureSession, resetLiveState, sessionId, startStream])
-
-  const banner = useMemo(() => {
-    if (!errors.length) {
-      return null
-    }
-    return errors[errors.length - 1]?.message ?? null
-  }, [errors])
+  }, [authChecked, ensureSession, resetLiveState, sessionId, startStream, streamCallbacks])
 
   return {
     sessionId,
     messages,
     loading,
     status,
-    banner,
-    errors,
-    streaming,
+    error,
     liveState,
     send,
     cancel,

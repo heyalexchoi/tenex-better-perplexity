@@ -2,14 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { AgentEvent } from "../types"
 import type { LiveState } from "../lib/buildFeed"
 
-type UseAgentStreamOptions = {
-  authToken: string
-  onDone: (result: string, timestamp: string, sessionId: string, runId: string) => void | Promise<void>
+type StreamCallbacks = {
+  onDone: () => void | Promise<void>
   onError: (message: string) => void
 }
 
-export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOptions) {
-  const [streaming, setStreaming] = useState(false)
+export function useAgentStream(authToken: string) {
   const [liveState, setLiveState] = useState<LiveState | null>(null)
   const streamRef = useRef<EventSource | null>(null)
   const liveToolSeqRef = useRef(0)
@@ -19,7 +17,6 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
       streamRef.current.close()
       streamRef.current = null
     }
-    setStreaming(false)
   }, [])
 
   const resetLiveState = useCallback(() => {
@@ -27,7 +24,7 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
   }, [])
 
   const startStream = useCallback(
-    (sessionId: string, runId: string) => {
+    (sessionId: string, runId: string, { onDone, onError }: StreamCallbacks) => {
       if (streamRef.current) {
         streamRef.current.close()
       }
@@ -41,7 +38,6 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
       const source = new EventSource(url.toString())
       streamRef.current = source
       liveToolSeqRef.current = 0
-      setStreaming(true)
       setLiveState({
         assistantText: "",
         thinkingText: "",
@@ -54,9 +50,7 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
 
         if (parsed.type === "token") {
           const text = String(parsed.data?.text ?? "")
-          if (!text) {
-            return
-          }
+          if (!text) return
           setLiveState((prev) => ({
             assistantText: `${prev?.assistantText ?? ""}${text}`,
             thinkingText: prev?.thinkingText ?? "",
@@ -68,14 +62,10 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
 
         if (parsed.type === "thinking") {
           const text = String(parsed.data?.text ?? "").trim()
-          if (!text) {
-            return
-          }
+          if (!text) return
           setLiveState((prev) => ({
             assistantText: prev?.assistantText ?? "",
-            thinkingText: prev?.thinkingText
-              ? `${prev.thinkingText}\n${text}`
-              : text,
+            thinkingText: prev?.thinkingText ? `${prev.thinkingText}\n${text}` : text,
             timestamp: parsed.timestamp,
             toolLines: prev?.toolLines ?? [],
           }))
@@ -89,14 +79,7 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
             assistantText: prev?.assistantText ?? "",
             thinkingText: prev?.thinkingText ?? "",
             timestamp: parsed.timestamp,
-            toolLines: [
-              ...(prev?.toolLines ?? []),
-              {
-                id,
-                label: `${name}: running...`,
-                timestamp: parsed.timestamp,
-              },
-            ],
+            toolLines: [...(prev?.toolLines ?? []), { id, label: `${name}: running...`, timestamp: parsed.timestamp }],
           }))
           return
         }
@@ -147,19 +130,16 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
 
         if (parsed.type === "done") {
           const result = String(parsed.data?.result ?? "")
-          setStreaming(false)
           source.close()
           streamRef.current = null
-          void Promise.resolve(onDone(result, parsed.timestamp, sessionId, runId)).catch((error) => {
-            const message = error instanceof Error ? error.message : "Failed to reconcile completed run."
-            onError(message)
+          void Promise.resolve(onDone()).catch((err) => {
+            onError(err instanceof Error ? err.message : "Failed to reconcile completed run.")
           })
           return
         }
 
         if (parsed.type === "error") {
           setLiveState(null)
-          setStreaming(false)
           onError(String(parsed.data?.error ?? "Agent error"))
           source.close()
           streamRef.current = null
@@ -168,21 +148,14 @@ export function useAgentStream({ authToken, onDone, onError }: UseAgentStreamOpt
 
       source.onerror = () => {
         onError("Stream disconnected.")
-        setStreaming(false)
         source.close()
         streamRef.current = null
       }
     },
-    [authToken, onDone, onError],
+    [authToken],
   )
 
   useEffect(() => stopStream, [stopStream])
 
-  return {
-    streaming,
-    liveState,
-    startStream,
-    stopStream,
-    resetLiveState,
-  }
+  return { liveState, startStream, stopStream, resetLiveState }
 }

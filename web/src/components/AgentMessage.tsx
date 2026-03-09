@@ -1,3 +1,4 @@
+import ReactMarkdown from "react-markdown"
 import type { AssistantPart } from "../types"
 
 type AgentMessageProps = {
@@ -66,8 +67,8 @@ export function AgentMessage({ parts, timestamp, onOpenScreenshot }: AgentMessag
               )
             }
             return (
-              <div key={key} className="whitespace-pre-wrap">
-                {part.text}
+              <div key={key} className="prose prose-sm max-w-none text-ink-900 text-sm">
+                <ReactMarkdown>{part.text}</ReactMarkdown>
               </div>
             )
           })}

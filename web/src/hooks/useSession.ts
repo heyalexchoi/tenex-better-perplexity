@@ -21,41 +21,48 @@ export function useSession(authToken: string) {
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
 
+  const fetchSession = useCallback(
+    async (id: string) => {
+      const res = await apiFetch(`/api/sessions/${id}`, {}, authToken)
+      if (!res.ok) return null
+      return (await res.json()) as Record<string, unknown>
+    },
+    [authToken],
+  )
+
+  const sessionResult = (data: Record<string, unknown>): EnsureSessionResult => ({
+    id: data.id as string,
+    status: (data.status as SessionStatus) ?? "idle",
+    activeRunId: (data.active_run_id as string | null) ?? null,
+  })
+
   const createNewSession = useCallback(async (): Promise<EnsureSessionResult> => {
     const createRes = await apiFetch("/api/sessions", { method: "POST" }, authToken)
+    if (!createRes.ok) throw new Error("Failed to create session")
     const session = await createRes.json()
     localStorage.setItem(LOCAL_SESSION_KEY, session.id)
     setSessionId(session.id)
     setMessages([])
-    return {
-      id: session.id as string,
-      status: (session.status as SessionStatus) ?? "idle",
-      activeRunId: (session.active_run_id as string | null) ?? null,
-    }
+    return sessionResult(session)
   }, [authToken])
 
   const ensureSession = useCallback(async (): Promise<EnsureSessionResult> => {
     setLoading(true)
-    const existing = localStorage.getItem(LOCAL_SESSION_KEY)
-    if (existing) {
-      const res = await apiFetch(`/api/sessions/${existing}`, {}, authToken)
-      if (res.ok) {
-        const data = await res.json()
-        setSessionId(data.id)
-        setMessages(data.messages ?? [])
-        setLoading(false)
-        return {
-          id: data.id as string,
-          status: (data.status as SessionStatus) ?? "idle",
-          activeRunId: (data.active_run_id as string | null) ?? null,
+    try {
+      const existing = localStorage.getItem(LOCAL_SESSION_KEY)
+      if (existing) {
+        const data = await fetchSession(existing)
+        if (data) {
+          setSessionId(data.id as string)
+          setMessages((data.messages as Message[]) ?? [])
+          return sessionResult(data)
         }
       }
+      return await createNewSession()
+    } finally {
+      setLoading(false)
     }
-
-    const session = await createNewSession()
-    setLoading(false)
-    return session
-  }, [authToken, createNewSession])
+  }, [createNewSession, fetchSession])
 
   const sendUserMessage = useCallback(
     async (text: string): Promise<SendMessageResult> => {
@@ -95,6 +102,14 @@ export function useSession(authToken: string) {
     await apiFetch(`/api/sessions/${sessionId}`, { method: "DELETE" }, authToken)
   }, [authToken, sessionId])
 
+  const refreshMessages = useCallback(async () => {
+    if (!sessionId) return
+    const data = await fetchSession(sessionId)
+    if (data) {
+      setMessages((data.messages as Message[]) ?? [])
+    }
+  }, [fetchSession, sessionId])
+
   return {
     sessionId,
     messages,
@@ -103,5 +118,6 @@ export function useSession(authToken: string) {
     sendUserMessage,
     cancelRun,
     createNewSession,
+    refreshMessages,
   }
 }

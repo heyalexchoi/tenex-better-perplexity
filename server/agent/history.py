@@ -82,7 +82,7 @@ def sanitize_tool_pairs(messages: list[BaseMessage]) -> list[BaseMessage]:
 
 
 async def _load_message_records(session_id: str, *, limit: int) -> list[Message]:
-    fetch_limit = min(max(limit * 6, limit), 400)
+    fetch_limit = min(limit * 6, 400)
     async with async_session() as db:
         stmt = (
             select(Message)

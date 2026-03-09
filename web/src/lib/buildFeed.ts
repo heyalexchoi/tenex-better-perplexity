@@ -120,6 +120,10 @@ export function buildFeed(messages: Message[], live: LiveState | null): FeedItem
       continue
     }
 
+    if (item.type === "assistant" && !item.content.trim()) {
+      continue
+    }
+
     if (!assistantGroup) {
       assistantGroup = {
         id: item.type === "assistant" ? item.id : `assistant-group-${item.id}`,
@@ -135,14 +139,6 @@ export function buildFeed(messages: Message[], live: LiveState | null): FeedItem
         label: item.label,
         lines: item.lines,
       })
-      assistantGroup.timestamp = item.timestamp
-      continue
-    }
-
-    if (!item.content.trim()) {
-      if (!assistantGroup.parts.length) {
-        assistantGroup.parts.push({ kind: "thinking", text: "Working..." })
-      }
       assistantGroup.timestamp = item.timestamp
       continue
     }

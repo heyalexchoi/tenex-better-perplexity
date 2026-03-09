@@ -33,12 +33,7 @@ export function ChatInput({ onSend, onCancel, disabled, running }: ChatInputProp
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault()
-              const trimmed = value.trim()
-              if (!trimmed) {
-                return
-              }
-              onSend(trimmed)
-              setValue("")
+              handleSubmit(event as unknown as FormEvent)
             }
           }}
           rows={2}

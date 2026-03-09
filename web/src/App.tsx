@@ -9,7 +9,7 @@ import { buildFeed } from "./lib/buildFeed"
 
 export default function App() {
   const { authToken, authChecked, authError, checkAuth } = useAuth()
-  const { sessionId, messages, status, banner, loading, liveState, send, cancel, newSession } =
+  const { sessionId, messages, status, error, loading, liveState, send, cancel, newSession } =
     useChatSession(authToken, authChecked)
 
   const [activeScreenshot, setActiveScreenshot] = useState<string | null>(null)
@@ -82,9 +82,9 @@ export default function App() {
         ) : (
           <section className="glass flex min-h-0 flex-1 flex-col rounded-3xl shadow-glow">
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-5 md:px-6">
-              {banner ? (
+              {error ? (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {banner}
+                  {error}
                 </div>
               ) : null}
               {feed.length ? (

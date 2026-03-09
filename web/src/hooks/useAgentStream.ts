@@ -129,7 +129,6 @@ export function useAgentStream(authToken: string) {
         }
 
         if (parsed.type === "done") {
-          const result = String(parsed.data?.result ?? "")
           source.close()
           streamRef.current = null
           void Promise.resolve(onDone()).catch((err) => {

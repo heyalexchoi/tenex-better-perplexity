@@ -9,6 +9,7 @@ FastAPI + browser-use app with Postgres, set up for development inside a devcont
 - An Anthropic API key (for Claude Code)
 - An OpenAI API key (for Codex)
 
+
 ## Setup
 
 ```bash
@@ -24,23 +25,9 @@ claude --dangerously-skip-permissions --resume
 ```
 
 ## Running
-
-### Option A: Devcontainer (recommended)
-
-Makes Claude Code available inside the container alongside the app.
-
-1. Set your API keys in your local environment (the devcontainer forwards them in):
-   ```bash
-   export ANTHROPIC_API_KEY=sk-ant-...
-   export OPENAI_API_KEY=sk-...
-   ```
-2. Open the project in VS Code and select **Reopen in Container** when prompted (or run `Dev Containers: Reopen in Container` from the command palette).
-3. VS Code will build the image and start all services. Once inside, both `claude` and `codex` are available in the terminal.
-
-### Option B: Docker Compose only
-
 ```bash
-docker compose up --build
+docker compose build
+docker compose up -d
 ```
 
 ## Services

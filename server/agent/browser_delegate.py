@@ -76,7 +76,12 @@ async def run_browser_delegate(
         raise RuntimeError("ANTHROPIC_API_KEY is missing")
 
     llm = ChatAnthropic(model=browser_model_name(settings.browser_agent_model), api_key=api_key)
-    browser = BrowserSession(headless=settings.headless)
+
+    chrome_user_data_dir = "data/chrome/user_data_dir"
+    browser_kwargs: dict[str, Any] = {"headless": settings.headless}
+    if os.path.isdir(chrome_user_data_dir):
+        browser_kwargs["user_data_dir"] = chrome_user_data_dir
+    browser = BrowserSession(**browser_kwargs)
 
     steps: list[dict[str, Any]] = []
 

@@ -16,11 +16,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
-      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     command: ./start.sh
 
@@ -40,21 +37,8 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
 volumes:
   postgres_data:
-  redis_data:
   screenshots_data:
   codex-data:
   claude-data:

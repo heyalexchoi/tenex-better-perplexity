@@ -1,6 +1,6 @@
 # Tenex Takehome
 
-FastAPI + browser-use app with Postgres and Redis, set up for development inside a devcontainer with Claude Code and Codex.
+FastAPI + browser-use app with Postgres, set up for development inside a devcontainer with Claude Code and Codex.
 
 ## Prerequisites
 
@@ -50,7 +50,6 @@ docker compose up --build
 | app      | 8000       | FastAPI + browser-use |
 | app      | 5173       | Vite frontend         |
 | db       | 5432       | PostgreSQL 16        |
-| redis    | 6379       | Redis 7              |
 
 - UI: http://localhost:5173
 - API: http://localhost:8000/api
@@ -60,10 +59,9 @@ docker compose up --build
 
 ```
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/app
-REDIS_URL=redis://redis:6379/0
 ```
 
-These are set automatically via `docker-compose.yml`. Update `.env` only for secrets and overrides.
+Set automatically via `docker-compose.yml`. Update `.env` only for secrets and overrides.
 
 ## Auth Gate
 

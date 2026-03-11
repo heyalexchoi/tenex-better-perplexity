@@ -55,6 +55,9 @@ export function buildFeed(messages: Message[], live: LiveState | null): FeedItem
           label: `Browser step ${stepNumber}: ${action}`,
           url: step.url ? String(step.url) : undefined,
           screenshot: step.screenshot ? String(step.screenshot) : null,
+          thinking: step.thinking ? String(step.thinking) : null,
+          nextGoal: step.next_goal ? String(step.next_goal) : null,
+          evaluationPreviousGoal: step.evaluation_previous_goal ? String(step.evaluation_previous_goal) : null,
           timestamp: message.timestamp,
         })
       }

@@ -27,6 +27,9 @@ export type ToolLine = {
   label: string
   url?: string
   screenshot?: string | null
+  thinking?: string | null
+  nextGoal?: string | null
+  evaluationPreviousGoal?: string | null
   timestamp: string
 }
 

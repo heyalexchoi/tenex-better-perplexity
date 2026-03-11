@@ -27,6 +27,9 @@ def tool_event_data(
     output_preview: str | None = None,
     url: str | None = None,
     screenshot: str | None = None,
+    thinking: str | None = None,
+    next_goal: str | None = None,
+    evaluation_previous_goal: str | None = None,
 ) -> dict[str, Any]:
     data: dict[str, Any] = {"name": name}
     if input_data is not None:
@@ -37,6 +40,12 @@ def tool_event_data(
         data["url"] = url
     if screenshot:
         data["screenshot"] = screenshot
+    if thinking:
+        data["thinking"] = thinking
+    if next_goal:
+        data["next_goal"] = next_goal
+    if evaluation_previous_goal:
+        data["evaluation_previous_goal"] = evaluation_previous_goal
     return data
 
 
@@ -58,6 +67,9 @@ async def emit_tool_progress(
     output_preview: str,
     url: str | None = None,
     screenshot: str | None = None,
+    thinking: str | None = None,
+    next_goal: str | None = None,
+    evaluation_previous_goal: str | None = None,
 ) -> None:
     await emit(
         runtime,
@@ -68,6 +80,9 @@ async def emit_tool_progress(
                 output_preview=output_preview,
                 url=url,
                 screenshot=screenshot,
+                thinking=thinking,
+                next_goal=next_goal,
+                evaluation_previous_goal=evaluation_previous_goal,
             ),
             timestamp=now_iso(),
         ),

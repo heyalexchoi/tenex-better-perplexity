@@ -49,6 +49,19 @@ export function AgentMessage({ parts, timestamp, onOpenScreenshot }: AgentMessag
                           <div key={line.id} className="space-y-1">
                             <div>{line.label}</div>
                             {line.url ? <div className="truncate text-[11px] text-fog-400">{line.url}</div> : null}
+                            {line.evaluationPreviousGoal ? (
+                              <div className="text-[11px] text-fog-400">
+                                <span className="font-medium">Eval:</span> {line.evaluationPreviousGoal}
+                              </div>
+                            ) : null}
+                            {line.nextGoal ? (
+                              <div className="text-[11px] text-fog-400">
+                                <span className="font-medium">Next:</span> {line.nextGoal}
+                              </div>
+                            ) : null}
+                            {line.thinking ? (
+                              <div className="text-[11px] italic text-fog-400">{line.thinking}</div>
+                            ) : null}
                             {screenshotSrc ? (
                               <button
                                 type="button"

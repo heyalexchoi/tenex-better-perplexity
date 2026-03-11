@@ -43,8 +43,6 @@ def extract_browser_action_text(agent_output: Any) -> str:
         actions = getattr(agent_output, "action", None)
         if actions:
             return str(actions[-1])
-    with suppress(Exception):
-        return str(getattr(agent_output, "next_goal", ""))
     return "step completed"
 
 
@@ -60,6 +58,9 @@ def compact_browser_report(task: str, browser_result: dict[str, Any]) -> dict[st
                 "action": str(s.get("action", "") or ""),
                 "url": str(s.get("url", "") or ""),
                 "screenshot": s.get("screenshot"),
+                "thinking": s.get("thinking"),
+                "next_goal": s.get("next_goal"),
+                "evaluation_previous_goal": s.get("evaluation_previous_goal"),
             }
             for s in list(browser_result.get("steps", []))
         ],
@@ -89,12 +90,18 @@ async def run_browser_delegate(
         url = getattr(browser_state, "url", None)
         screenshot_url = save_screenshot_file(getattr(browser_state, "screenshot", None), settings)
         action_text = extract_browser_action_text(agent_output)
+        thinking = str(getattr(agent_output, "thinking", "") or "")
+        next_goal = str(getattr(agent_output, "next_goal", "") or "")
+        evaluation = str(getattr(agent_output, "evaluation_previous_goal", "") or "")
         await emit_tool_progress(
             runtime,
             name="browser_use_step",
             output_preview=f"Step {step_number}: {action_text}",
             url=str(url) if url else None,
             screenshot=screenshot_url,
+            thinking=thinking or None,
+            next_goal=next_goal or None,
+            evaluation_previous_goal=evaluation or None,
         )
 
         steps.append(
@@ -103,6 +110,9 @@ async def run_browser_delegate(
                 "action": action_text,
                 "url": url,
                 "screenshot": screenshot_url,
+                "thinking": thinking or None,
+                "next_goal": next_goal or None,
+                "evaluation_previous_goal": evaluation or None,
             }
         )
 

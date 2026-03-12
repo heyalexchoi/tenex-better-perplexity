@@ -13,6 +13,10 @@ from browser_use import Agent as BrowserUseAgent
 from browser_use import BrowserSession, ChatAnthropic
 from langchain_core.tools import ToolException
 
+
+class BrowserBusyError(ToolException):
+    """Raised when a browser task is requested while one is already running."""
+
 from server.agent.events import emit_tool_progress
 from server.agent.settings import AgentSettings, browser_model_name
 from server.runtime import SessionRuntime, browser_semaphore
@@ -75,7 +79,7 @@ async def run_browser_delegate(
     settings: AgentSettings,
 ) -> dict[str, Any]:
     if browser_semaphore._value == 0:
-        raise ToolException("Browser is busy — only one browser task can run at a time. Wait for the current task to finish.")
+        raise BrowserBusyError("Browser is busy — only one browser task can run at a time. Wait for the current task to finish.")
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:

@@ -7,12 +7,19 @@ import json
 import logging
 from typing import Annotated
 
+from langchain.agents import create_agent
+from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
 from langchain.chat_models import init_chat_model
 from langchain_core.tools import InjectedToolCallId, tool
 
-from langchain.agents import create_agent
 
-from server.agent.browser_delegate import compact_browser_report, run_browser_delegate
+class _SequentialToolCalls(AgentMiddleware):
+    async def awrap_model_call(self, request: ModelRequest, handler):
+        return await handler(
+            request.override(model_settings={**request.model_settings, "parallel_tool_calls": False})
+        )
+
+from server.agent.browser_delegate import BrowserBusyError, compact_browser_report, run_browser_delegate
 from server.agent.events import (
     emit_done,
     emit_error,
@@ -54,7 +61,10 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
             tool_call_id: Annotated[str, InjectedToolCallId],
         ) -> str:
             """Run a web browsing task in a real browser and return a compact JSON report."""
-            browser_result = await run_browser_delegate(runtime, task, settings)
+            try:
+                browser_result = await run_browser_delegate(runtime, task, settings)
+            except BrowserBusyError as e:
+                return f"Error: {e}"
             report = compact_browser_report(task, browser_result)
             final_result = str(report.get("final_result", "") or "").strip() or "Browser task completed."
             persist_report = {k: v for k, v in report.items() if k != "final_result"}
@@ -79,11 +89,11 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
             "You are the user-facing web research chat assistant. "
             "Use normal chat replies for requests that do not require fresh web interaction. "
             "Call run_browser_task ONLY when web browsing/search is needed to answer accurately. "
-            "Never call run_browser_task more than once per turn — only one browser task can run at a time. "
+            "You MUST call run_browser_task at most once per response. Only one browser task can run at a time — any additional calls in the same response will fail with an error. If multiple searches are needed, make one call, get the result, then decide on the next step. "
             "If you have enough information from previous web browsing / search calls to answer questions accurately, then do not make more tool calls. "
             "If run_browser_task is used, incorporate its result into a direct final answer."
         )
-        agent = create_agent(model=model, tools=[run_browser_task], system_prompt=system_prompt)
+        agent = create_agent(model=model, tools=[run_browser_task], system_prompt=system_prompt, middleware=[_SequentialToolCalls()])
         chat_history = await load_recent_chat_messages(runtime.session_id, settings)
 
         final_text = ""

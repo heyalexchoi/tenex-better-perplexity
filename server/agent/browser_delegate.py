@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from browser_use import Agent as BrowserUseAgent
 from browser_use import BrowserSession, ChatAnthropic
+from langchain_core.tools import ToolException
 
 from server.agent.events import emit_tool_progress
 from server.agent.settings import AgentSettings, browser_model_name
@@ -74,7 +75,7 @@ async def run_browser_delegate(
     settings: AgentSettings,
 ) -> dict[str, Any]:
     if browser_semaphore._value == 0:
-        raise RuntimeError("Browser is busy — only one browser session runs at a time.")
+        raise ToolException("Browser is busy — only one browser task can run at a time. Wait for the current task to finish.")
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:

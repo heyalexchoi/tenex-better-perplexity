@@ -79,7 +79,8 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
             "You are the user-facing web research chat assistant. "
             "Use normal chat replies for requests that do not require fresh web interaction. "
             "Call run_browser_task ONLY when web browsing/search is needed to answer accurately. "
-            "If you have enough information from previous web browsing / search calls to answer questions accurately, then do not make more tool calls "
+            "Never call run_browser_task more than once per turn — only one browser task can run at a time. "
+            "If you have enough information from previous web browsing / search calls to answer questions accurately, then do not make more tool calls. "
             "If run_browser_task is used, incorporate its result into a direct final answer."
         )
         agent = create_agent(model=model, tools=[run_browser_task], system_prompt=system_prompt)
@@ -102,10 +103,13 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
                 continue
 
             if kind == "on_tool_start":
+                tool_name = str(raw_event.get("name", "tool"))
+                tool_input = data.get("input", {})
+                logger.info("tool_call session_id=%s tool=%s input=%s", runtime.session_id, tool_name, tool_input)
                 await emit_tool_start(
                     runtime,
-                    name=str(raw_event.get("name", "tool")),
-                    input_data=data.get("input", {}),
+                    name=tool_name,
+                    input_data=tool_input,
                 )
                 continue
 

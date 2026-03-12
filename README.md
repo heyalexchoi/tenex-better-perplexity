@@ -75,8 +75,8 @@ Tool metadata (including `tool_name` and `tool_call_id`) is stored in `message.m
 
 ## Migrations
 
-Initial Alembic migration is included. For production, run:
+On new db, run:
 
 ```bash
-alembic upgrade head
+docker compose exec app alembic upgrade head       
 ```

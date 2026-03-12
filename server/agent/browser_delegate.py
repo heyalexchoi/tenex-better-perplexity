@@ -13,7 +13,7 @@ from browser_use import BrowserSession, ChatAnthropic
 
 from server.agent.events import emit_tool_progress
 from server.agent.settings import AgentSettings, browser_model_name
-from server.runtime import SessionRuntime
+from server.runtime import SessionRuntime, browser_semaphore
 
 
 def save_screenshot_file(raw: Any, settings: AgentSettings) -> str | None:
@@ -72,76 +72,80 @@ async def run_browser_delegate(
     task: str,
     settings: AgentSettings,
 ) -> dict[str, Any]:
+    if browser_semaphore._value == 0:
+        raise RuntimeError("Browser is busy — only one browser session runs at a time.")
+
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is missing")
 
-    llm = ChatAnthropic(model=browser_model_name(settings.browser_agent_model), api_key=api_key)
+    async with browser_semaphore:
+        llm = ChatAnthropic(model=browser_model_name(settings.browser_agent_model), api_key=api_key)
 
-    chrome_user_data_dir = "data/chrome/user_data_dir"
-    browser_kwargs: dict[str, Any] = {"headless": settings.headless}
-    if os.path.isdir(chrome_user_data_dir):
-        browser_kwargs["user_data_dir"] = chrome_user_data_dir
-    browser = BrowserSession(**browser_kwargs)
+        chrome_user_data_dir = "data/chrome/user_data_dir"
+        browser_kwargs: dict[str, Any] = {"headless": settings.headless}
+        if os.path.isdir(chrome_user_data_dir):
+            browser_kwargs["user_data_dir"] = chrome_user_data_dir
+        browser = BrowserSession(**browser_kwargs)
 
-    steps: list[dict[str, Any]] = []
+        steps: list[dict[str, Any]] = []
 
-    async def on_step(browser_state, agent_output, step_number: int) -> None:
-        url = getattr(browser_state, "url", None)
-        screenshot_url = save_screenshot_file(getattr(browser_state, "screenshot", None), settings)
-        action_text = extract_browser_action_text(agent_output)
-        thinking = str(getattr(agent_output, "thinking", "") or "")
-        next_goal = str(getattr(agent_output, "next_goal", "") or "")
-        evaluation = str(getattr(agent_output, "evaluation_previous_goal", "") or "")
-        await emit_tool_progress(
-            runtime,
-            name="browser_use_step",
-            output_preview=f"Step {step_number}: {action_text}",
-            url=str(url) if url else None,
-            screenshot=screenshot_url,
-            thinking=thinking or None,
-            next_goal=next_goal or None,
-            evaluation_previous_goal=evaluation or None,
+        async def on_step(browser_state, agent_output, step_number: int) -> None:
+            url = getattr(browser_state, "url", None)
+            screenshot_url = save_screenshot_file(getattr(browser_state, "screenshot", None), settings)
+            action_text = extract_browser_action_text(agent_output)
+            thinking = str(getattr(agent_output, "thinking", "") or "")
+            next_goal = str(getattr(agent_output, "next_goal", "") or "")
+            evaluation = str(getattr(agent_output, "evaluation_previous_goal", "") or "")
+            await emit_tool_progress(
+                runtime,
+                name="browser_use_step",
+                output_preview=f"Step {step_number}: {action_text}",
+                url=str(url) if url else None,
+                screenshot=screenshot_url,
+                thinking=thinking or None,
+                next_goal=next_goal or None,
+                evaluation_previous_goal=evaluation or None,
+            )
+
+            steps.append(
+                {
+                    "step": step_number,
+                    "action": action_text,
+                    "url": url,
+                    "screenshot": screenshot_url,
+                    "thinking": thinking or None,
+                    "next_goal": next_goal or None,
+                    "evaluation_previous_goal": evaluation or None,
+                }
+            )
+
+        agent = BrowserUseAgent(
+            task=task,
+            llm=llm,
+            browser_session=browser,
+            register_new_step_callback=on_step,
+            extend_system_message="google is unavailable in your environment. do not navigate to google. use your search tool for searches."
         )
 
-        steps.append(
-            {
-                "step": step_number,
-                "action": action_text,
-                "url": url,
-                "screenshot": screenshot_url,
-                "thinking": thinking or None,
-                "next_goal": next_goal or None,
-                "evaluation_previous_goal": evaluation or None,
-            }
-        )
+        try:
+            history = await agent.run(max_steps=settings.browser_max_steps)
+        finally:
+            await browser.stop()
 
-    agent = BrowserUseAgent(
-        task=task,
-        llm=llm,
-        browser_session=browser,
-        register_new_step_callback=on_step,
-        extend_system_message="google is unavailable in your environment. do not navigate to google. use your search tool for searches."
-    )
+        final_result = ""
+        with suppress(Exception):
+            final_result = str(history.final_result() or "")
+        errors: list[str] = []
+        with suppress(Exception):
+            errors = [str(e) for e in (history.errors() or []) if e]
+        urls: list[str] = []
+        with suppress(Exception):
+            urls = [str(u) for u in (history.urls() or []) if u]
 
-    try:
-        history = await agent.run(max_steps=settings.browser_max_steps)
-    finally:
-        await browser.stop()
-
-    final_result = ""
-    with suppress(Exception):
-        final_result = str(history.final_result() or "")
-    errors: list[str] = []
-    with suppress(Exception):
-        errors = [str(e) for e in (history.errors() or []) if e]
-    urls: list[str] = []
-    with suppress(Exception):
-        urls = [str(u) for u in (history.urls() or []) if u]
-
-    return {
-        "final_result": final_result,
-        "errors": errors,
-        "urls": urls,
-        "steps": steps,
-    }
+        return {
+            "final_result": final_result,
+            "errors": errors,
+            "urls": urls,
+            "steps": steps,
+        }

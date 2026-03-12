@@ -20,9 +20,16 @@ from server.database import check_db_ready, get_session
 from server.models import Message, MessageCreate, Session, SessionResponse
 from server.runtime import MessageStreamState, SessionRuntime, active_sessions, event_to_dict, run_streams
 
+def _cleanup_screenshots(directory: Path, max_count: int = 100) -> None:
+    files = sorted(directory.glob("*.png"), key=lambda f: f.stat().st_mtime)
+    for f in files[:-max_count] if len(files) > max_count else []:
+        f.unlink(missing_ok=True)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await check_db_ready()
+    _cleanup_screenshots(SCREENSHOT_ROOT)
     yield
 
 

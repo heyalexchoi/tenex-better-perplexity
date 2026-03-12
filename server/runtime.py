@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from asyncio import Condition, Task
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -57,6 +59,7 @@ class SessionRuntime:
 
 active_sessions: dict[str, SessionRuntime] = {}
 run_streams: dict[str, tuple[str, MessageStreamState]] = {}
+browser_semaphore = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_BROWSERS", "1")))
 
 
 def now_iso() -> str:

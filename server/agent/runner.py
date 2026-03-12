@@ -28,9 +28,17 @@ from server.agent.llm_output import (
     extract_final_text,
 )
 from server.agent.settings import get_settings, normalize_model
-from server.runtime import SessionRuntime
+from server.runtime import SessionRuntime, run_streams
 
 logger = logging.getLogger(__name__)
+
+
+async def _cleanup_run_stream(run_id: str, delay: int = 300) -> None:
+    try:
+        await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        return
+    run_streams.pop(run_id, None)
 
 
 async def run_agent_task(runtime: SessionRuntime) -> None:
@@ -138,11 +146,15 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
         await persist_message(runtime.session_id, "assistant", final_text)
         await update_session_status(runtime.session_id, "idle")
         await emit_done(runtime, final_text)
+        if runtime.active_run_id:
+            asyncio.create_task(_cleanup_run_stream(runtime.active_run_id))
 
     except asyncio.CancelledError:
         await persist_message(runtime.session_id, "assistant", "Task cancelled.")
         await emit_error(runtime, "Task cancelled")
         await update_session_status(runtime.session_id, "idle")
+        if runtime.active_run_id:
+            asyncio.create_task(_cleanup_run_stream(runtime.active_run_id))
         raise
 
     except Exception as exc:
@@ -150,3 +162,5 @@ async def run_agent_task(runtime: SessionRuntime) -> None:
         logger.exception("Agent run failed for session_id=%s", runtime.session_id)
         await emit_error(runtime, str(exc))
         await update_session_status(runtime.session_id, "error")
+        if runtime.active_run_id:
+            asyncio.create_task(_cleanup_run_stream(runtime.active_run_id))

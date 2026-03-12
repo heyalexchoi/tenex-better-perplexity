@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from contextlib import suppress
@@ -129,7 +130,7 @@ async def run_browser_delegate(
         )
 
         try:
-            history = await agent.run(max_steps=settings.browser_max_steps)
+            history = await asyncio.wait_for(agent.run(max_steps=settings.browser_max_steps), timeout=600)
         finally:
             await browser.stop()
 

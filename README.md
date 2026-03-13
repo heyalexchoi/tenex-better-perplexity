@@ -28,6 +28,8 @@ claude --dangerously-skip-permissions --resume
 ```bash
 docker compose build
 docker compose up -d
+# First time only — run migrations:
+docker compose exec app alembic upgrade head
 ```
 
 ## Services
@@ -73,10 +75,3 @@ Runtime architecture:
 Tool outputs are persisted as `tool` messages. Screenshot blobs are written to disk and tool messages store screenshot URL references.
 Tool metadata (including `tool_name` and `tool_call_id`) is stored in `message.meta_json`.
 
-## Migrations
-
-On new db, run:
-
-```bash
-docker compose exec app alembic upgrade head       
-```
